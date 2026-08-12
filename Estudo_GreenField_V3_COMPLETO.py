@@ -1053,16 +1053,21 @@ def refine_selected_contiguous_v3(
 
 def calculate_metropolitan_requirements(demand: pd.DataFrame,candidates: pd.DataFrame,n: int,cfg: ModelConfig) -> pd.DataFrame:
     target=float(demand["CARGA_EQUIVALENTE"].sum())/n; metro=demand[demand["POPULACAO_MUNICIPIO"]>=cfg.large_city_threshold]
-    if metro.empty: return pd.DataFrame(columns=["COD_IBGE","CARGA_CIDADE","POPULACAO_CIDADE","QTD_UNIDADES_CIDADE","POLOS_DESEJADOS","QTD_CANDIDATOS"])
+    if metro.empty: return pd.DataFrame(columns=["COD_IBGE","CARGA_CIDADE","POPULACAO_CIDADE","QTD_UNIDADES_CIDADE","MIN_UNIDADES_POR_POLO","MAX_POLOS_POR_UNIDADES","STATUS_GRANULARIDADE","POLOS_DESEJADOS","QTD_CANDIDATOS"])
     city=metro.groupby("COD_IBGE",as_index=False).agg(CARGA_CIDADE=("CARGA_EQUIVALENTE","sum"),POPULACAO_CIDADE=("POPULACAO_MUNICIPIO","max"),QTD_UNIDADES_CIDADE=("DEMAND_ID","nunique")); counts=candidates.groupby("COD_IBGE").size().rename("QTD_CANDIDATOS").reset_index(); city=city.merge(counts,on="COD_IBGE",how="left"); city["QTD_CANDIDATOS"]=city["QTD_CANDIDATOS"].fillna(0).astype(int)
     minimum=max(int(cfg.minimum_metropolitan_units_per_manager),1)
-    invalid=city[city["QTD_UNIDADES_CIDADE"]<minimum]
-    if not invalid.empty:
-        codes=", ".join(invalid["COD_IBGE"].astype(str).tolist()[:10])
-        raise RuntimeError(f"Metrópoles sem ao menos {minimum} unidades territoriais: {codes}")
+    # Alguns municípios >=300 mil possuem somente um distrito oficial no IBGE.
+    # Nesses casos a granularidade da fonte limita a cidade a um único polo; exigir
+    # dois distritos tornaria o modelo inviável sem criar divisões territoriais falsas.
+    city["MIN_UNIDADES_POR_POLO"]=np.minimum(city["QTD_UNIDADES_CIDADE"],minimum).clip(lower=1).astype(int)
+    city["MAX_POLOS_POR_UNIDADES"]=(city["QTD_UNIDADES_CIDADE"]//minimum).clip(lower=1).astype(int)
+    limited=city["QTD_UNIDADES_CIDADE"]<minimum
+    city["STATUS_GRANULARIDADE"]=np.where(limited,"LIMITADO_A_1_POLO_DISTRITO_OFICIAL_UNICO","GRANULARIDADE_SUFICIENTE")
+    if limited.any():
+        codes=", ".join(city.loc[limited,"COD_IBGE"].astype(str).tolist())
+        logging.warning("Metrópoles com somente um distrito oficial serão limitadas a um polo: %s",codes)
     city["POLOS_DESEJADOS"]=np.ceil(city["CARGA_CIDADE"]/max(target*cfg.metropolitan_load_factor,1e-9)).astype(int).clip(lower=1); city["POLOS_DESEJADOS"]=np.minimum(city["POLOS_DESEJADOS"],city["QTD_CANDIDATOS"])
-    max_by_units=(city["QTD_UNIDADES_CIDADE"]//minimum).clip(lower=1)
-    city["POLOS_DESEJADOS"]=np.minimum(city["POLOS_DESEJADOS"],max_by_units)
+    city["POLOS_DESEJADOS"]=np.minimum(city["POLOS_DESEJADOS"],city["MAX_POLOS_POR_UNIDADES"])
     return city.sort_values(["CARGA_CIDADE","POPULACAO_CIDADE"],ascending=False).reset_index(drop=True)
 
 
@@ -1085,7 +1090,7 @@ def select_metropolitan_seeds(demand: pd.DataFrame,candidates: pd.DataFrame,cost
         code=str(candidates.iloc[int(c)]["COD_IBGE"])
         if code in metro_codes: allocated[code]+=1
     for r in req.itertuples(index=False):
-        maximum=int(r.QTD_UNIDADES_CIDADE)//max(int(cfg.minimum_metropolitan_units_per_manager),1)
+        maximum=int(r.MAX_POLOS_POR_UNIDADES)
         if allocated[str(r.COD_IBGE)]>maximum: raise RuntimeError(f"As âncoras GR exigem {allocated[str(r.COD_IBGE)]} polos na metrópole {r.COD_IBGE}, mas há distritos para no máximo {maximum}.")
     units={str(k):g["DEMAND_IDX"].to_numpy(int) for k,g in demand.groupby("COD_IBGE")}; cands={str(k):g["CANDIDATE_IDX"].to_numpy(int) for k,g in candidates.groupby("COD_IBGE")}
     for r in req.itertuples(index=False):
@@ -1249,13 +1254,15 @@ def ensure_metropolitan_minimum_units(
 
     for code,clusters_here in metro_clusters.items():
         city_units=demand.index[(demand["COD_IBGE"].astype(str)==code)&demand["TIPO_UNIDADE"].eq("DISTRITO")].to_numpy(int)
+        city_minimum=min(minimum,len(city_units))
+        if city_minimum<=0: continue
         for receiver in clusters_here:
-            while int(np.sum(x[city_units]==receiver))<minimum:
+            while int(np.sum(x[city_units]==receiver))<city_minimum:
                 counts={c:int(np.sum(x[city_units]==c)) for c in clusters_here}; best=None
                 for unit in city_units:
                     unit=int(unit); origin=int(x[unit])
                     if origin<0 or origin==receiver or unit in fixed: continue
-                    if origin in counts and counts[origin]<=minimum: continue
+                    if origin in counts and counts[origin]<=city_minimum: continue
                     if receiver not in receiver_clusters(unit,origin,x,neighbors): continue
                     if not removal_preserves_cluster_connectivity(unit,origin,x,neighbors): continue
                     if cost[unit,selected[receiver]]>=PROHIBITED_SERVICE_COST: continue
@@ -1264,7 +1271,7 @@ def ensure_metropolitan_minimum_units(
                     cand=(delta,unit,origin)
                     if best is None or cand[0]<best[0]: best=cand
                 if best is None:
-                    raise RuntimeError(f"Não foi possível garantir {minimum} distritos contíguos para um polo da metrópole {code}.")
+                    raise RuntimeError(f"Não foi possível garantir {city_minimum} distritos contíguos para um polo da metrópole {code}.")
                 delta,unit,origin=best; x[unit]=receiver; cluster_load[origin]-=loads[unit]; cluster_load[receiver]+=loads[unit]
                 moves.append({"DEMAND_IDX":unit,"ORIGEM_CLUSTER":origin,"DESTINO_CLUSTER":receiver,"MOTIVO":"MINIMO_DISTRITOS_METROPOLE","DELTA_CUSTO_PONDERADO":delta,"MELHORA_CARGA_NORMALIZADA":np.nan})
     logging.info("Ajuste mínimo metropolitano: %s movimentos",len(moves)); return x,moves
@@ -1311,8 +1318,9 @@ def validate_solution_constraints(
         c=candidates.iloc[int(cidx)]
         if float(c.POPULACAO_SEDE_REFERENCIA)<cfg.large_city_threshold: continue
         city_units=demand.index[(demand["COD_IBGE"].astype(str)==str(c.COD_IBGE))&demand["TIPO_UNIDADE"].eq("DISTRITO")].to_numpy(int)
-        if int(np.sum(position[city_units]==cluster))<minimum:
-            raise RuntimeError(f"O polo metropolitano {manager_id(n,cluster)} atende menos de {minimum} distritos da própria metrópole.")
+        city_minimum=min(minimum,len(city_units))
+        if city_minimum and int(np.sum(position[city_units]==cluster))<city_minimum:
+            raise RuntimeError(f"O polo metropolitano {manager_id(n,cluster)} atende menos de {city_minimum} distritos da própria metrópole.")
 
 # =============================================================================
 # RESULTADO / DIAGNÓSTICOS
