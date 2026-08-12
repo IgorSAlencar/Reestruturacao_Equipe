@@ -16,6 +16,11 @@ corporativa (Node 22.11.0 / npm 10.9.0) é suportada.
 
 A API descobre automaticamente cenários completos nas pastas `saida_greenfield_v3` e `saida_greenfield_v4`. A visão **Atual** é criada pelo botão **Atualizar lojas**, que executa a consulta SQL existente e grava um cache local em `.territorios-data`.
 
+A conexão SQL da visão **Atual** usa diretamente o pacote Node `mssql`, com as
+variáveis `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`, `SQL_PASSWORD`, `SQL_DOMAIN`
+e `SQL_INSTANCE`. É possível testar a conexão em `GET /api/sql/health`; a rota
+não devolve senha nem outras credenciais.
+
 Se uma tentativa anterior deixou `node_modules` parcialmente instalado, feche
 terminais Node/Vite e o Explorer do VS Code dentro de `node_modules`, remova a
 pasta e execute `npm ci`. As versões de React, Vite, Tailwind, TypeScript,

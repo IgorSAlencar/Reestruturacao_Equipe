@@ -10,7 +10,7 @@
     "dev": "vite --host 0.0.0.0",
     "dev:api": "node --experimental-sqlite --watch api/server.js",
     "build": "tsc -b && vite build",
-    "test": "node --experimental-strip-types --test shared/geo.test.ts api/config.test.js",
+    "test": "node --experimental-strip-types --test shared/geo.test.ts api/config.test.js api/sqlServer.test.js",
     "typecheck": "tsc -b"
   },
   "dependencies": {
@@ -18,16 +18,17 @@
     "dotenv": "17.2.1",
     "express": "5.2.1",
     "mapbox-gl": "3.13.0",
+    "mssql": "12.3.1",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "zod": "3.23.8"
   },
   "devDependencies": {
-    "@vitejs/plugin-react-swc": "3.7.1",
     "@types/geojson": "7946.0.16",
     "@types/node": "22.7.9",
     "@types/react": "18.3.12",
     "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react-swc": "3.7.1",
     "autoprefixer": "10.4.20",
     "postcss": "8.4.47",
     "tailwindcss": "3.4.17",
@@ -35,8 +36,25 @@
     "vite": "5.4.10"
   },
   "overrides": {
+    "@azure-rest/core-client": "2.6.0",
+    "@azure/abort-controller": "2.1.2",
+    "@azure/core-auth": "1.10.1",
+    "@azure/core-client": "1.10.1",
+    "@azure/core-http-compat": "2.4.0",
+    "@azure/core-paging": "1.6.2",
+    "@azure/core-rest-pipeline": "1.23.0",
+    "@azure/core-tracing": "1.3.1",
+    "@azure/core-util": "1.13.1",
+    "@azure/keyvault-keys": "4.10.0",
+    "@azure/logger": "1.3.0",
+    "@azure/msal-browser": "5.7.0",
+    "@azure/msal-common": "16.5.0",
+    "@azure/msal-node": "5.1.3",
+    "@js-joda/core": "5.7.0",
     "@mapbox/jsonlint-lines-primitives": "2.0.2",
     "@mapbox/tiny-sdf": "2.0.6",
+    "@types/readable-stream": "4.0.23",
+    "@typespec/ts-http-runtime": "0.3.5",
     "browserslist": "4.24.2",
     "caniuse-lite": "1.0.30001806",
     "cheap-ruler": "4.0.0",
@@ -44,10 +62,14 @@
     "electron-to-chromium": "1.5.45",
     "geojson-vt": "4.0.2",
     "gl-matrix": "3.4.3",
+    "iconv-lite": "0.7.2",
     "kdbush": "4.0.2",
     "nanoid": "3.3.7",
     "node-releases": "2.0.18",
     "potpack": "2.0.0",
+    "semver": "7.6.3",
+    "tarn": "3.0.2",
+    "tedious": "19.2.1",
     "update-browserslist-db": "1.1.1"
   }
 }

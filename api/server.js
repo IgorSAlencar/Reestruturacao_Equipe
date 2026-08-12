@@ -1,13 +1,13 @@
 import fs from 'node:fs';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
 import express from 'express';
 import cors from 'cors';
 import { z } from 'zod';
-import { API_PORT, DATA_DIR, MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE, MUNICIPALITIES_FILE, ROOT } from './config.js';
+import { API_PORT, DATA_DIR, MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE, MUNICIPALITIES_FILE } from './config.js';
 import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from './db.js';
 import { listScenarios, loadCurrent, loadScenario } from './scenarios.js';
+import { refreshCurrentCache } from './currentCache.js';
+import { closeSqlPool, testSqlConnection } from './sqlServer.js';
 
 const app=express();
 app.use(cors());
@@ -33,6 +33,9 @@ app.get('/api/drafts/:id/geojson',(req,res)=>{
 });
 let refreshing=false,lastRefreshError=null;
 app.get('/api/current-cache/status',(_,res)=>res.json({available:!!loadCurrent(),refreshing,lastError:lastRefreshError,dataDir:DATA_DIR}));
-app.post('/api/current-cache/refresh',(_,res)=>{if(refreshing)return res.status(409).json({message:'Atualização já está em andamento.'});refreshing=true;lastRefreshError=null;const child=spawn(process.env.PYTHON_BIN||'python',[path.join(ROOT,'utils','export_current_cache.py')],{cwd:ROOT,env:process.env});let error='';child.stderr.on('data',d=>error+=String(d));child.on('close',code=>{refreshing=false;if(code!==0)lastRefreshError=error.trim()||`Python encerrou com código ${code}`;});res.status(202).json({message:'Atualização iniciada.'});});
+app.get('/api/sql/health',async(_,res)=>res.json({ok:true,...await testSqlConnection()}));
+app.post('/api/current-cache/refresh',(_,res)=>{if(refreshing)return res.status(409).json({message:'Atualização já está em andamento.'});refreshing=true;lastRefreshError=null;refreshCurrentCache().catch(error=>{lastRefreshError=error.message;console.error('Falha ao atualizar lojas:',error);}).finally(()=>{refreshing=false;});res.status(202).json({message:'Atualização iniciada.'});});
 app.use((error,_,res,__)=>res.status(error.status||500).json({message:error.message}));
-app.listen(API_PORT,'0.0.0.0',()=>console.log(`API: http://0.0.0.0:${API_PORT}`));
+const server=app.listen(API_PORT,'0.0.0.0',()=>console.log(`API: http://0.0.0.0:${API_PORT}`));
+const shutdown=async()=>{server.close();await closeSqlPool();};
+process.once('SIGINT',shutdown);process.once('SIGTERM',shutdown);
