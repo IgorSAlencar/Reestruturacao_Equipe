@@ -10,7 +10,7 @@
     "dev": "vite",
     "dev:api": "node --experimental-sqlite --watch api/server.js",
     "build": "tsc -b && vite build",
-    "test": "node --experimental-strip-types --test shared/geo.test.ts api/config.test.js api/sqlServer.test.js",
+    "test": "node --experimental-strip-types --test shared/geo.test.ts shared/population.test.ts api/config.test.js api/sqlServer.test.js",
     "typecheck": "tsc -b"
   },
   "dependencies": {

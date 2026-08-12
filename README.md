@@ -37,3 +37,14 @@ JavaScript puro e não depende de `tsx`.
 ## Builder
 
 Abra qualquer cenário no Builder, arraste polos, selecione unidades territoriais e atribua-as manualmente ou redistribua a seleção entre polos da mesma gerência de área. Rascunhos são persistidos localmente em SQLite com controle de revisão.
+
+## Camadas do mapa
+
+O mapa usa projeção Mercator. Cada `DESC_GERENCIA_AREA` recebe uma cor própria;
+ao selecionar uma gerência, somente seus polos permanecem visíveis. O clique em
+um polo destaca sua carteira municipal com preenchimento translúcido e contorno.
+
+O botão **Mapa de calor** consulta `IBGE.dbo.IBGE_POP`, relacionando
+`COD_UN_REG` à malha municipal e classificando `POPULACAO` em seis faixas. A
+resposta é armazenada em `.territorios-data/population.json` para permitir a
+última visualização disponível durante indisponibilidades temporárias do SQL.

@@ -17,6 +17,7 @@ const number = (value) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 const validCoordinates = (latitude, longitude) => latitude >= -35.5 && latitude <= 6.5 && longitude >= -75.5 && longitude <= -32;
+const populationCacheFile = path.join(DATA_DIR, 'population.json');
 
 function normalizeMunicipalityCode(value, validCodes, sixDigitCodes) {
   const code = digits(value);
@@ -34,6 +35,49 @@ async function query(connection, filename, configure) {
   configure?.(request);
   const statement = (await readQuery(filename)).replaceAll(':periodo', '@periodo');
   return (await request.query(statement)).recordset;
+}
+
+function populationPayload(rows, stale = false) {
+  const values = {};
+  let censusYear = null;
+  for (const row of rows) {
+    const code = digits(row.COD_UN_REG).padStart(7, '0').slice(0, 7);
+    const value = number(row.POPULACAO);
+    const year = number(row.DATA_CENSO);
+    if (code && value !== null) values[code] = Math.max(0, Math.round(value));
+    if (year !== null) censusYear = Math.max(censusYear || 0, year);
+  }
+  return {
+    source: 'IBGE.dbo.IBGE_POP',
+    censusYear,
+    count: Object.keys(values).length,
+    values,
+    cachedAt: new Date().toISOString(),
+    stale,
+  };
+}
+
+async function writePopulationCache(payload) {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  const temporaryFile = `${populationCacheFile}.tmp`;
+  await fs.writeFile(temporaryFile, JSON.stringify(payload), 'utf8');
+  await fs.rename(temporaryFile, populationCacheFile);
+}
+
+export async function loadPopulation() {
+  try {
+    const connection = await getSqlPool();
+    const payload = populationPayload(await query(connection, 'POPULACAO.sql'));
+    await writePopulationCache(payload);
+    return payload;
+  } catch (error) {
+    try {
+      const cached = JSON.parse(await fs.readFile(populationCacheFile, 'utf8'));
+      return { ...cached, stale: true };
+    } catch {
+      throw error;
+    }
+  }
 }
 
 export async function refreshCurrentCache() {
@@ -141,6 +185,7 @@ export async function refreshCurrentCache() {
   };
 
   await fs.mkdir(DATA_DIR, { recursive: true });
+  await writePopulationCache(populationPayload(population));
   const temporaryFile = path.join(DATA_DIR, 'current.json.tmp');
   await fs.writeFile(temporaryFile, JSON.stringify(payload), 'utf8');
   await fs.rename(temporaryFile, path.join(DATA_DIR, 'current.json'));

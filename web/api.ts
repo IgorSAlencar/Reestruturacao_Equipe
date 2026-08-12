@@ -1,5 +1,7 @@
 import type { DraftData, ScenarioData, ScenarioSummary } from '../shared/types';
 
+export type PopulationResponse={source:string;censusYear:number|null;count:number;values:Record<string,number>;cachedAt:string;stale:boolean};
+
 async function request<T>(url:string,init?:RequestInit):Promise<T>{
   const r=await fetch(url,{...init,headers:{'content-type':'application/json',...(init?.headers||{})}});
   if(!r.ok)throw new Error((await r.json().catch(()=>({message:r.statusText}))).message); return r.json();
@@ -15,4 +17,5 @@ export const api={
   saveDraft:(draft:DraftData)=>request<DraftData>(`/api/drafts/${draft.id}`,{method:'PUT',body:JSON.stringify({name:draft.name,revision:draft.revision,data:draft.data})}),
   refresh:()=>request<{message:string}>('/api/current-cache/refresh',{method:'POST'}),
   cacheStatus:()=>request<{available:boolean;refreshing:boolean;lastError:string|null}>('/api/current-cache/status'),
+  population:()=>request<PopulationResponse>('/api/population'),
 };
