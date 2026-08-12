@@ -12,7 +12,12 @@ corporativa (Node 22.11.0 / npm 10.9.0) é suportada.
 3. Em um terminal execute `npm run dev:api`. O script habilita automaticamente
    o SQLite experimental exigido pelo Node 22.11.0.
 4. Em outro terminal execute `npm run dev`.
-5. Abra o endereço de rede exibido pelo Vite.
+5. Abra `http://10.206.168.97:5173`. A API responde no mesmo IP em
+   `http://10.206.168.97:333` e o frontend encaminha `/api` para esse endereço.
+
+Os endereços são controlados por `APP_HOST`, `WEB_PORT`, `API_HOST` e
+`API_PORT`. Os padrões estão preparados para a máquina corporativa
+(`10.206.168.97`, portas `5173` e `333`).
 
 A API descobre automaticamente cenários completos nas pastas `saida_greenfield_v3` e `saida_greenfield_v4`. A visão **Atual** é criada pelo botão **Atualizar lojas**, que executa a consulta SQL existente e grava um cache local em `.territorios-data`.
 

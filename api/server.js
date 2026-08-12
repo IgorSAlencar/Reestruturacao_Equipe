@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import express from 'express';
 import cors from 'cors';
 import { z } from 'zod';
-import { API_PORT, DATA_DIR, MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE, MUNICIPALITIES_FILE } from './config.js';
+import { API_HOST, API_PORT, DATA_DIR, MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE, MUNICIPALITIES_FILE } from './config.js';
 import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from './db.js';
 import { listScenarios, loadCurrent, loadScenario } from './scenarios.js';
 import { refreshCurrentCache } from './currentCache.js';
@@ -36,6 +36,6 @@ app.get('/api/current-cache/status',(_,res)=>res.json({available:!!loadCurrent()
 app.get('/api/sql/health',async(_,res)=>res.json({ok:true,...await testSqlConnection()}));
 app.post('/api/current-cache/refresh',(_,res)=>{if(refreshing)return res.status(409).json({message:'Atualização já está em andamento.'});refreshing=true;lastRefreshError=null;refreshCurrentCache().catch(error=>{lastRefreshError=error.message;console.error('Falha ao atualizar lojas:',error);}).finally(()=>{refreshing=false;});res.status(202).json({message:'Atualização iniciada.'});});
 app.use((error,_,res,__)=>res.status(error.status||500).json({message:error.message}));
-const server=app.listen(API_PORT,'0.0.0.0',()=>console.log(`API: http://0.0.0.0:${API_PORT}`));
+const server=app.listen(API_PORT,API_HOST,()=>console.log(`API: http://${API_HOST}:${API_PORT}`));
 const shutdown=async()=>{server.close();await closeSqlPool();};
 process.once('SIGINT',shutdown);process.once('SIGTERM',shutdown);
