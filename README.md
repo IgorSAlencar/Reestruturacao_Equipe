@@ -9,7 +9,8 @@ corporativa (Node 22.11.0 / npm 10.9.0) é suportada.
 
 1. Copie as variáveis necessárias de `.env.example` para `.env`. O mapa já possui um token público (`pk.`); `MAPBOX_ACCESS_TOKEN` é apenas uma substituição opcional.
 2. Instale exatamente as dependências validadas com `npm ci`.
-3. Em um terminal execute `npm run dev:api`.
+3. Em um terminal execute `npm run dev:api`. O script habilita automaticamente
+   o SQLite experimental exigido pelo Node 22.11.0.
 4. Em outro terminal execute `npm run dev`.
 5. Abra o endereço de rede exibido pelo Vite.
 
