@@ -416,6 +416,159 @@ def load_municipal_geometry(cfg: ModelConfig) -> gpd.GeoDataFrame:
     logging.info("Geometrias municipais: %s",len(g)); return g.reset_index(drop=True)
 
 
+def reconcile_district_geometries(
+    district_reference: pd.DataFrame,
+    district_geo: Optional[gpd.GeoDataFrame],
+    municipal_geo: gpd.GeoDataFrame,
+    metropolitan_codes: set[str],
+) -> tuple[pd.DataFrame, gpd.GeoDataFrame, pd.DataFrame]:
+    """Alinha distritos de 2022 aos limites municipais vigentes de 2025."""
+    if district_geo is None:
+        raise RuntimeError("A reconciliacao exige a malha distrital.")
+    if not metropolitan_codes:
+        return district_reference.copy(), district_geo.copy(), pd.DataFrame()
+
+    parents = (
+        municipal_geo[municipal_geo["CD_MUN"].isin(metropolitan_codes)][
+            ["CD_MUN", "geometry"]
+        ]
+        .to_crs(epsg=5880)
+        .set_index("CD_MUN")
+    )
+    missing_parents = sorted(metropolitan_codes - set(parents.index.astype(str)))
+    if missing_parents:
+        raise RuntimeError(
+            "Metropoles sem geometria municipal para reconciliar distritos: "
+            + ", ".join(missing_parents[:30])
+        )
+
+    target = district_geo[
+        district_geo["CD_MUN"].astype(str).isin(metropolitan_codes)
+    ].copy()
+    target = target.to_crs(epsg=5880).reset_index(drop=True)
+    if target.empty:
+        raise RuntimeError(
+            "Nenhum distrito metropolitano disponivel para reconciliacao."
+        )
+
+    clipped_geometries: list[Any] = []
+    district_rows: list[dict[str, Any]] = []
+    for row in target.itertuples(index=False):
+        parent_code = str(row.CD_MUN)
+        original = row.geometry
+        parent = parents.loc[parent_code, "geometry"]
+        if not original.is_valid:
+            original = original.buffer(0)
+        if not parent.is_valid:
+            parent = parent.buffer(0)
+        clipped = original.intersection(parent)
+        if clipped.geom_type == "GeometryCollection":
+            clipped = clipped.buffer(0)
+        original_area = float(original.area) / 1_000_000
+        clipped_area = float(clipped.area) / 1_000_000
+        removed_area = max(original_area - clipped_area, 0.0)
+        clipped_geometries.append(clipped)
+        district_rows.append(
+            {
+                "METRICA": "RECORTE_DISTRITO_AO_MUNICIPIO_PAI",
+                "COD_IBGE": parent_code,
+                "CD_DIST": str(row.CD_DIST),
+                "AREA_DISTRITO_ORIGINAL_KM2": original_area,
+                "AREA_DISTRITO_RECONCILIADA_KM2": clipped_area,
+                "AREA_REMOVIDA_KM2": removed_area,
+                "PERC_AREA_REMOVIDA": removed_area / max(original_area, 1e-12),
+                "ESPERADO": "GEOMETRIA_CONTIDA_NO_MUNICIPIO_PAI",
+                "STATUS": "OK"
+                if not clipped.is_empty and clipped_area > 0
+                else "VIOLACAO",
+                "DETALHE": "Distrito 2022 intersectado com o limite municipal 2025.",
+            }
+        )
+
+    target = target.set_geometry(
+        gpd.GeoSeries(clipped_geometries, index=target.index, crs="EPSG:5880")
+    )
+    invalid = target.geometry.is_empty | target.geometry.isna()
+    if invalid.any():
+        codes = target.loc[invalid, "CD_DIST"].astype(str).tolist()
+        raise RuntimeError(
+            "Distritos ficaram vazios apos o recorte ao municipio-pai: "
+            + ", ".join(codes[:30])
+        )
+
+    city_rows: list[dict[str, Any]] = []
+    for code, group in target.groupby("CD_MUN", sort=True):
+        parent = parents.loc[str(code), "geometry"]
+        union = group.geometry.union_all()
+        gap = float(parent.difference(union).area) / 1_000_000
+        outside_after = float(union.difference(parent).area) / 1_000_000
+        parent_area = max(float(parent.area) / 1_000_000, 1e-12)
+        city_rows.append(
+            {
+                "METRICA": "COBERTURA_DISTRITAL_APOS_RECONCILIACAO",
+                "COD_IBGE": str(code),
+                "QTD_DISTRITOS": len(group),
+                "AREA_MUNICIPIO_KM2": parent_area,
+                "LACUNA_DISTRITAL_KM2": gap,
+                "AREA_DISTRITAL_FORA_MUNICIPIO_KM2": outside_after,
+                "PERC_COBERTURA_DISTRITAL": max(0.0, 1.0 - gap / parent_area),
+                "ESPERADO": "AREA_FORA_MUNICIPIO_ZERO",
+                "STATUS": "OK" if outside_after <= 1e-8 else "VIOLACAO",
+                "DETALHE": "Lacunas de vintage sao auditadas; sobreposicao externa e eliminada.",
+            }
+        )
+
+    target["AREA_KM2_GEOMETRIA"] = target.geometry.area.to_numpy(float) / 1_000_000
+    representative = gpd.GeoSeries(
+        target.geometry.representative_point(), crs="EPSG:5880"
+    ).to_crs(epsg=4326)
+    target["LAT_GEOMETRIA"] = representative.y.to_numpy()
+    target["LON_GEOMETRIA"] = representative.x.to_numpy()
+
+    corrected_geo = district_geo.copy()
+    target_in_source_crs = target.to_crs(corrected_geo.crs).set_index("CD_DIST")
+    corrected_geo = corrected_geo.set_index("CD_DIST", drop=False)
+    corrected_geo.loc[target_in_source_crs.index, "geometry"] = (
+        target_in_source_crs.geometry
+    )
+    for column in ("AREA_KM2_GEOMETRIA", "LAT_GEOMETRIA", "LON_GEOMETRIA"):
+        corrected_geo.loc[target_in_source_crs.index, column] = target_in_source_crs[
+            column
+        ]
+    corrected_geo = gpd.GeoDataFrame(
+        corrected_geo.reset_index(drop=True), geometry="geometry", crs=district_geo.crs
+    )
+
+    corrected_reference = district_reference.copy().set_index("CD_DIST", drop=False)
+    corrected_reference.loc[target_in_source_crs.index, "AREA_KM2_DISTRITO"] = (
+        target_in_source_crs["AREA_KM2_GEOMETRIA"]
+    )
+    corrected_reference.loc[target_in_source_crs.index, "LATITUDE_DISTRITO"] = (
+        target_in_source_crs["LAT_GEOMETRIA"]
+    )
+    corrected_reference.loc[target_in_source_crs.index, "LONGITUDE_DISTRITO"] = (
+        target_in_source_crs["LON_GEOMETRIA"]
+    )
+    corrected_reference = corrected_reference.reset_index(drop=True)
+
+    audit = pd.DataFrame(district_rows + city_rows)
+    if audit["STATUS"].eq("VIOLACAO").any():
+        raise RuntimeError(
+            "A reconciliacao geometrica distrital encontrou violacoes: "
+            + json.dumps(
+                audit[audit["STATUS"] == "VIOLACAO"].head(20).to_dict("records"),
+                ensure_ascii=False,
+                default=str,
+            )
+        )
+    logging.info(
+        "Distritos reconciliados: %s | area externa removida: %.3f km2",
+        len(target),
+        float(audit.get("AREA_REMOVIDA_KM2", pd.Series(dtype=float)).sum()),
+    )
+    return corrected_reference, corrected_geo, audit
+
+
 def load_raw_data(engine: Engine, cfg: ModelConfig) -> dict[str,pd.DataFrame]:
     return {
         "municipalities":uppercase_columns(pd.read_sql(text(load_sql_file("COORDENADAS_MUNICIPIOS.sql")),engine)),
@@ -570,20 +723,81 @@ def assign_split_stores_by_nearest_district(split_stores: pd.DataFrame, district
     return pd.concat(out,ignore_index=True) if out else pd.DataFrame(columns=list(split_stores.columns)+["DEMAND_ID","METODO_ASSOCIACAO_UNIDADE"])
 
 
-def assign_stores_to_demand_units(stores: pd.DataFrame, demand: pd.DataFrame, split: set[str], district_geo: Optional[gpd.GeoDataFrame]) -> pd.DataFrame:
-    stores=stores[stores["COD_IBGE"].isin(set(demand["COD_IBGE"]))].copy(); normal=stores[~stores["COD_IBGE"].isin(split)].copy(); normal["DEMAND_ID"]="MUN-"+normal["COD_IBGE"]; normal["METODO_ASSOCIACAO_UNIDADE"]="CODIGO_MUNICIPIO"
-    s=stores[stores["COD_IBGE"].isin(split)].copy(); dunit=demand[demand["TIPO_UNIDADE"]=="DISTRITO"][["DEMAND_ID","COD_IBGE","CD_DIST","LATITUDE","LONGITUDE"]]
-    sr=pd.DataFrame()
-    if not s.empty and district_geo is not None:
-        geo=district_geo[district_geo["CD_MUN"].isin(split)][["CD_MUN","CD_DIST","geometry"]].copy(); geo=geo.to_crs(epsg=4326) if geo.crs.to_epsg()!=4326 else geo; geo=geo.merge(dunit[["CD_DIST","DEMAND_ID"]],on="CD_DIST",how="inner")
-        pts=gpd.GeoDataFrame(s.copy(),geometry=gpd.points_from_xy(s["LONGITUDE"],s["LATITUDE"]),crs="EPSG:4326")
-        j=gpd.sjoin(pts,geo[["CD_MUN","CD_DIST","DEMAND_ID","geometry"]],how="left",predicate="within").sort_values("CHAVE_LOJA").drop_duplicates("CHAVE_LOJA")
-        j["METODO_ASSOCIACAO_UNIDADE"]=np.where(j["DEMAND_ID"].notna(),"PONTO_DENTRO_DISTRITO",pd.NA); sr=pd.DataFrame(j.drop(columns=["geometry","index_right"],errors="ignore")); missing=sr["DEMAND_ID"].isna()
-        if missing.any():
-            fb=assign_split_stores_by_nearest_district(sr.loc[missing,stores.columns].copy(),dunit); sr=pd.concat([sr.loc[~missing],fb],ignore_index=True,sort=False)
-    elif not s.empty: sr=assign_split_stores_by_nearest_district(s,dunit)
-    x=pd.concat([normal,sr],ignore_index=True,sort=False).drop_duplicates("CHAVE_LOJA"); x=x[x["DEMAND_ID"].isin(set(demand["DEMAND_ID"]))].reset_index(drop=True)
-    logging.info("Lojas associadas: %s",len(x)); return x
+def assign_stores_to_demand_units(
+    stores: pd.DataFrame,
+    demand: pd.DataFrame,
+    split: set[str],
+    district_geo: Optional[gpd.GeoDataFrame],
+) -> pd.DataFrame:
+    eligible_stores = stores[stores["COD_IBGE"].isin(set(demand["COD_IBGE"]))].copy()
+    normal = eligible_stores[~eligible_stores["COD_IBGE"].isin(split)].copy()
+    normal["DEMAND_ID"] = "MUN-" + normal["COD_IBGE"]
+    normal["METODO_ASSOCIACAO_UNIDADE"] = "CODIGO_MUNICIPIO"
+    parts = [normal]
+
+    if split and district_geo is None:
+        raise RuntimeError(
+            "Associacao metropolitana de lojas exige geometria distrital."
+        )
+    district_units = demand[demand["TIPO_UNIDADE"].eq("DISTRITO")][
+        ["DEMAND_ID", "COD_IBGE", "CD_DIST", "LATITUDE", "LONGITUDE"]
+    ]
+    for code in sorted(split):
+        city_stores = eligible_stores[eligible_stores["COD_IBGE"].eq(code)].copy()
+        if city_stores.empty:
+            continue
+        city_units = district_units[district_units["COD_IBGE"].eq(code)].copy()
+        city_geo = district_geo[district_geo["CD_MUN"].astype(str).eq(code)][
+            ["CD_MUN", "CD_DIST", "geometry"]
+        ].copy()
+        city_geo = city_geo.to_crs(epsg=4326)
+        city_geo = city_geo.merge(
+            city_units[["CD_DIST", "DEMAND_ID"]], on="CD_DIST", how="inner"
+        )
+        points = gpd.GeoDataFrame(
+            city_stores,
+            geometry=gpd.points_from_xy(
+                city_stores["LONGITUDE"], city_stores["LATITUDE"]
+            ),
+            crs="EPSG:4326",
+        )
+        joined = gpd.sjoin(
+            points,
+            city_geo[["CD_MUN", "CD_DIST", "DEMAND_ID", "geometry"]],
+            how="left",
+            predicate="within",
+        )
+        joined = joined[
+            joined["DEMAND_ID"].notna()
+            & joined["CD_MUN"].astype(str).eq(joined["COD_IBGE"].astype(str))
+        ].sort_values("CHAVE_LOJA")
+        joined = joined.drop_duplicates("CHAVE_LOJA")
+        assigned = pd.DataFrame(
+            joined.drop(columns=["geometry", "index_right"], errors="ignore")
+        )
+        assigned["METODO_ASSOCIACAO_UNIDADE"] = (
+            "PONTO_DENTRO_DISTRITO_RECONCILIADO"
+        )
+        missing = city_stores[
+            ~city_stores["CHAVE_LOJA"].isin(set(assigned["CHAVE_LOJA"]))
+        ].copy()
+        fallback = assign_split_stores_by_nearest_district(missing, city_units)
+        parts.extend([assigned, fallback])
+
+    out = pd.concat(parts, ignore_index=True, sort=False)
+    out = out.drop_duplicates("CHAVE_LOJA")
+    out = out[out["DEMAND_ID"].isin(set(demand["DEMAND_ID"]))].reset_index(drop=True)
+    parent_by_unit = demand.set_index("DEMAND_ID")["COD_IBGE"].astype(str)
+    assigned_parent = out["DEMAND_ID"].map(parent_by_unit)
+    mismatch = assigned_parent.ne(out["COD_IBGE"].astype(str))
+    if mismatch.any():
+        sample = out.loc[mismatch, ["CHAVE_LOJA", "COD_IBGE", "DEMAND_ID"]].head(20)
+        raise RuntimeError(
+            "Lojas associadas a distrito de outro municipio: "
+            + json.dumps(sample.to_dict("records"), ensure_ascii=False, default=str)
+        )
+    logging.info("Lojas associadas: %s", len(out))
+    return out
 
 
 def enrich_demand_units_with_score(demand: pd.DataFrame, stores: pd.DataFrame, cfg: ModelConfig) -> pd.DataFrame:
@@ -1450,12 +1664,14 @@ def main() -> None:
 
         log_step("3/9 Preparação das bases")
         municipal_ref=prepare_municipal_reference(raw["municipalities"],raw["population"],municipal_geo); regional=prepare_regional_points(raw["regional_points"],municipal_geo,cfg); hierarchy=prepare_current_hierarchy(raw["current_hierarchy"]); excluded=load_excluded_municipalities(municipal_ref,cfg); stores=prepare_stores(raw["stores"],municipal_ref); current=attach_current_hierarchy(prepare_current_poles(raw["current_poles"],cfg),hierarchy)
+        metropolitan_codes=set(municipal_ref.loc[(municipal_ref["POPULACAO_MUNICIPIO"]>=cfg.large_city_threshold) & ~municipal_ref["COD_IBGE"].isin(excluded),"COD_IBGE"].astype(str))
+        district_ref,district_geo,district_geometry_audit=reconcile_district_geometries(district_ref,district_geo,municipal_geo,metropolitan_codes)
 
         log_step("4/9 Demanda híbrida e carga")
         demand,split=build_hybrid_demand_units(municipal_ref,district_ref,excluded,cfg); validate_demand_exclusivity(demand,split); stores_units=assign_stores_to_demand_units(stores,demand,split,district_geo); demand=enrich_demand_units_with_score(demand,stores_units,cfg)
 
         log_step("5/9 Candidatos, custos e topologia")
-        candidates=build_candidate_sites(demand,cfg); anchor_seeds,anchor_audit=match_regional_anchors(regional,candidates,cfg); distance=haversine_matrix_float32(demand,candidates,cfg.distance_chunk_size); cost=build_service_cost_matrix(demand,candidates,distance,cfg); unit_geo=build_hybrid_unit_geometry(demand,municipal_geo,district_geo); territorial_audit_base=build_territorial_geometry_audit(unit_geo,municipal_geo,demand,cfg); neighbors=build_adjacency_graph(unit_geo,len(demand),cfg); cost=apply_cross_uf_frontier_constraint(cost,demand,candidates,neighbors)
+        candidates=build_candidate_sites(demand,cfg); anchor_seeds,anchor_audit=match_regional_anchors(regional,candidates,cfg); distance=haversine_matrix_float32(demand,candidates,cfg.distance_chunk_size); cost=build_service_cost_matrix(demand,candidates,distance,cfg); unit_geo=build_hybrid_unit_geometry(demand,municipal_geo,district_geo); territorial_audit_base=pd.concat([district_geometry_audit,build_territorial_geometry_audit(unit_geo,municipal_geo,demand,cfg)],ignore_index=True,sort=False); neighbors=build_adjacency_graph(unit_geo,len(demand),cfg); cost=apply_cross_uf_frontier_constraint(cost,demand,candidates,neighbors)
         if cfg.require_topology_for_v3:
             geo_idx=set(unit_geo["DEMAND_IDX"].astype(int)); missing=demand[demand["EH_UNIDADE_ESTRATEGICA"] & ~demand["DEMAND_IDX"].isin(geo_idx)]
             if not missing.empty: raise RuntimeError(f"{len(missing)} unidades estratégicas sem geometria. Corrija a malha antes de rodar a V3.")

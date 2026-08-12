@@ -74,7 +74,12 @@ def test_300_thousand_is_split_and_299999_is_not() -> None:
     assert metropolis["POPULACAO_UNIDADE"].sum() == pytest.approx(300_000.0)
 
 
-def test_district_geometry_is_clipped_to_parent_municipality() -> None:
+@pytest.mark.parametrize(
+    "reconciler",
+    [v4.reconcile_district_geometries, v4.v3.reconcile_district_geometries],
+    ids=["v4", "v3"],
+)
+def test_district_geometry_is_clipped_to_parent_municipality(reconciler) -> None:
     municipal_geo = gpd.GeoDataFrame(
         {"CD_MUN": ["3500001", "3500002"]},
         geometry=[box(0, 0, 1_000, 1_000), box(1_000, 0, 2_000, 1_000)],
@@ -101,7 +106,7 @@ def test_district_geometry_is_clipped_to_parent_municipality() -> None:
         }
     )
 
-    corrected_reference, corrected_geo, audit = v4.reconcile_district_geometries(
+    corrected_reference, corrected_geo, audit = reconciler(
         district_reference, district_geo, municipal_geo, {"3500001"}
     )
 
@@ -115,7 +120,14 @@ def test_district_geometry_is_clipped_to_parent_municipality() -> None:
     assert audit["STATUS"].eq("OK").all()
 
 
-def test_store_is_never_assigned_to_district_of_another_municipality() -> None:
+@pytest.mark.parametrize(
+    "assigner",
+    [v4.assign_stores_to_v4_demand, v4.v3.assign_stores_to_demand_units],
+    ids=["v4", "v3"],
+)
+def test_store_is_never_assigned_to_district_of_another_municipality(
+    assigner,
+) -> None:
     demand = pd.DataFrame(
         {
             "DEMAND_ID": ["DIST-350000101", "DIST-350000202"],
@@ -146,9 +158,7 @@ def test_store_is_never_assigned_to_district_of_another_municipality() -> None:
         }
     )
 
-    assigned = v4.assign_stores_to_v4_demand(
-        stores, demand, {"3500001", "3500002"}, district_geo
-    )
+    assigned = assigner(stores, demand, {"3500001", "3500002"}, district_geo)
 
     assert assigned.iloc[0]["DEMAND_ID"] == "DIST-350000101"
     assert assigned.iloc[0]["METODO_ASSOCIACAO_UNIDADE"] == (
