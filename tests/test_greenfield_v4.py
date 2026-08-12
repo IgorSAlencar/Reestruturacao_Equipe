@@ -1,8 +1,10 @@
 from dataclasses import replace
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
+from shapely.geometry import box
 
 import Estudo_GreenField_V4_OTIMO as v4
 
@@ -70,6 +72,88 @@ def test_300_thousand_is_split_and_299999_is_not() -> None:
     assert metropolis["TIPO_UNIDADE"].eq("DISTRITO").all()
     assert len(metropolis) == 2
     assert metropolis["POPULACAO_UNIDADE"].sum() == pytest.approx(300_000.0)
+
+
+def test_district_geometry_is_clipped_to_parent_municipality() -> None:
+    municipal_geo = gpd.GeoDataFrame(
+        {"CD_MUN": ["3500001", "3500002"]},
+        geometry=[box(0, 0, 1_000, 1_000), box(1_000, 0, 2_000, 1_000)],
+        crs="EPSG:5880",
+    )
+    district_geo = gpd.GeoDataFrame(
+        {
+            "CD_DIST": ["350000101"],
+            "CD_MUN": ["3500001"],
+            "AREA_KM2_GEOMETRIA": [1.1],
+            "LAT_GEOMETRIA": [0.0],
+            "LON_GEOMETRIA": [0.0],
+        },
+        geometry=[box(0, 0, 1_100, 1_000)],
+        crs="EPSG:5880",
+    )
+    district_reference = pd.DataFrame(
+        {
+            "CD_DIST": ["350000101"],
+            "CD_MUN": ["3500001"],
+            "AREA_KM2_DISTRITO": [1.1],
+            "LATITUDE_DISTRITO": [0.0],
+            "LONGITUDE_DISTRITO": [0.0],
+        }
+    )
+
+    corrected_reference, corrected_geo, audit = v4.reconcile_district_geometries(
+        district_reference, district_geo, municipal_geo, {"3500001"}
+    )
+
+    clipped = corrected_geo.iloc[0].geometry
+    neighbor = municipal_geo.iloc[1].geometry
+    assert clipped.area / 1_000_000 == pytest.approx(1.0)
+    assert clipped.intersection(neighbor).area == pytest.approx(0.0)
+    assert corrected_reference.iloc[0]["AREA_KM2_DISTRITO"] == pytest.approx(1.0)
+    district_audit = audit[audit["METRICA"] == "RECORTE_DISTRITO_AO_MUNICIPIO_PAI"]
+    assert district_audit.iloc[0]["AREA_REMOVIDA_KM2"] == pytest.approx(0.1)
+    assert audit["STATUS"].eq("OK").all()
+
+
+def test_store_is_never_assigned_to_district_of_another_municipality() -> None:
+    demand = pd.DataFrame(
+        {
+            "DEMAND_ID": ["DIST-350000101", "DIST-350000202"],
+            "TIPO_UNIDADE": ["DISTRITO", "DISTRITO"],
+            "COD_IBGE": ["3500001", "3500002"],
+            "CD_DIST": ["350000101", "350000202"],
+            "LATITUDE": [-23.0, -23.0],
+            "LONGITUDE": [-46.0, -46.0],
+        }
+    )
+    district_geo = gpd.GeoDataFrame(
+        {
+            "CD_MUN": ["3500001", "3500002"],
+            "CD_DIST": ["350000101", "350000202"],
+        },
+        geometry=[
+            box(-46.1, -23.1, -45.9, -22.9),
+            box(-46.1, -23.1, -45.9, -22.9),
+        ],
+        crs="EPSG:4326",
+    )
+    stores = pd.DataFrame(
+        {
+            "CHAVE_LOJA": ["L1"],
+            "COD_IBGE": ["3500001"],
+            "LATITUDE": [-23.0],
+            "LONGITUDE": [-46.0],
+        }
+    )
+
+    assigned = v4.assign_stores_to_v4_demand(
+        stores, demand, {"3500001", "3500002"}, district_geo
+    )
+
+    assert assigned.iloc[0]["DEMAND_ID"] == "DIST-350000101"
+    assert assigned.iloc[0]["METODO_ASSOCIACAO_UNIDADE"] == (
+        "PONTO_DENTRO_DISTRITO_RECONCILIADO"
+    )
 
 
 def test_tiny_scip_model_is_feasible_contiguous_and_lexicographic() -> None:
