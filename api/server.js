@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { API_HOST, API_PORT, DATA_DIR, MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE, MUNICIPALITIES_FILE } from './config.js';
 import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from './db.js';
 import { listScenarios, loadCurrent, loadScenario } from './scenarios.js';
-import { loadPopulation, refreshCurrentCache } from './currentCache.js';
+import { loadPopulation, loadRegionalOffices, refreshCurrentCache } from './currentCache.js';
 import { closeSqlPool, testSqlConnection } from './sqlServer.js';
 
 const app=express();
@@ -19,6 +19,7 @@ app.get('/api/scenarios/current',(_,res)=>{const data=loadCurrent();data?res.jso
 app.get('/api/scenarios/:id',async(req,res)=>{const data=await loadScenario(req.params.id);data?res.json(data):res.status(404).json({message:'Cenário não encontrado.'});});
 app.get('/api/geometry/municipalities',(_,res)=>fs.existsSync(MUNICIPALITIES_FILE)?res.type('application/geo+json').sendFile(MUNICIPALITIES_FILE):res.status(404).json({message:'Malha municipal não encontrada.'}));
 app.get('/api/population',async(_,res)=>res.json(await loadPopulation()));
+app.get('/api/regional-offices',async(_,res)=>res.json(await loadRegionalOffices()));
 app.get('/api/drafts',(_,res)=>res.json(listDrafts()));
 app.get('/api/drafts/:id',(req,res)=>{const d=getDraft(req.params.id);d?res.json(d):res.status(404).json({message:'Rascunho não encontrado.'});});
 app.post('/api/drafts',(req,res)=>{const b=z.object({name:z.string().min(1),baseScenarioId:z.string(),data:z.any()}).parse(req.body);res.status(201).json(createDraft(randomUUID(),b.name,b.baseScenarioId,b.data));});

@@ -1,6 +1,7 @@
-import type { DraftData, ScenarioData, ScenarioSummary } from '../shared/types';
+import type { DraftData, RegionalOffice, ScenarioData, ScenarioSummary } from '../shared/types';
 
 export type PopulationResponse={source:string;censusYear:number|null;count:number;values:Record<string,number>;cachedAt:string;stale:boolean};
+export type RegionalOfficesResponse={source:string;count:number;points:RegionalOffice[];cachedAt:string;stale:boolean};
 
 async function request<T>(url:string,init?:RequestInit):Promise<T>{
   const r=await fetch(url,{...init,headers:{'content-type':'application/json',...(init?.headers||{})}});
@@ -18,4 +19,5 @@ export const api={
   refresh:()=>request<{message:string}>('/api/current-cache/refresh',{method:'POST'}),
   cacheStatus:()=>request<{available:boolean;refreshing:boolean;lastError:string|null}>('/api/current-cache/status'),
   population:()=>request<PopulationResponse>('/api/population'),
+  regionalOffices:()=>request<RegionalOfficesResponse>('/api/regional-offices'),
 };

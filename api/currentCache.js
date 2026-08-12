@@ -18,6 +18,7 @@ const number = (value) => {
 };
 const validCoordinates = (latitude, longitude) => latitude >= -35.5 && latitude <= 6.5 && longitude >= -75.5 && longitude <= -32;
 const populationCacheFile = path.join(DATA_DIR, 'population.json');
+const regionalCacheFile = path.join(DATA_DIR, 'regional-offices.json');
 
 function normalizeMunicipalityCode(value, validCodes, sixDigitCodes) {
   const code = digits(value);
@@ -73,6 +74,51 @@ export async function loadPopulation() {
   } catch (error) {
     try {
       const cached = JSON.parse(await fs.readFile(populationCacheFile, 'utf8'));
+      return { ...cached, stale: true };
+    } catch {
+      throw error;
+    }
+  }
+}
+
+function regionalPayload(rows, stale = false) {
+  const grouped = new Map();
+  for (const row of rows) {
+    const id = text(row.COD_GER_REG);
+    const latitude = number(row.LATITUDE);
+    const longitude = number(row.LONGITUDE);
+    if (!id || latitude === null || longitude === null || !validCoordinates(latitude, longitude)) continue;
+    if (!grouped.has(id)) grouped.set(id, {
+      id,
+      name: text(row.GER_REGIONAL) || id,
+      latitude,
+      longitude,
+      address: text(row.END),
+      agencyIds: new Set(),
+    });
+    const agencyId = text(row.COD_AG);
+    if (agencyId) grouped.get(id).agencyIds.add(agencyId);
+  }
+  const points = [...grouped.values()].map(({ agencyIds, ...regional }) => ({ ...regional, agencies: agencyIds.size }));
+  return { source: 'TESTE.dbo.TB_COORD_GR', count: points.length, points, cachedAt: new Date().toISOString(), stale };
+}
+
+async function writeJsonCache(filename, payload) {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  const temporaryFile = `${filename}.tmp`;
+  await fs.writeFile(temporaryFile, JSON.stringify(payload), 'utf8');
+  await fs.rename(temporaryFile, filename);
+}
+
+export async function loadRegionalOffices() {
+  try {
+    const connection = await getSqlPool();
+    const payload = regionalPayload(await query(connection, 'BASE_GR.sql'));
+    await writeJsonCache(regionalCacheFile, payload);
+    return payload;
+  } catch (error) {
+    try {
+      const cached = JSON.parse(await fs.readFile(regionalCacheFile, 'utf8'));
       return { ...cached, stale: true };
     } catch {
       throw error;
