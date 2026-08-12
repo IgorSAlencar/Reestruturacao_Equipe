@@ -15,8 +15,6 @@
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",
-    "@turf/bbox": "^7.2.0",
-    "@turf/centroid": "^7.2.0",
     "dotenv": "^17.2.2",
     "fastify": "^5.5.0",
     "mapbox-gl": "^3.14.0",

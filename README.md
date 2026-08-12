@@ -17,8 +17,8 @@ A API descobre automaticamente cenários completos nas pastas `saida_greenfield_
 
 Se uma tentativa anterior deixou `node_modules` parcialmente instalado, feche
 terminais Node/Vite e o Explorer do VS Code dentro de `node_modules`, remova a
-pasta e execute `npm ci`. O projeto não depende de Babel/Browserslist, que não
-estão disponíveis no Nexus corporativo mostrado no erro.
+pasta e execute `npm ci`. O projeto não depende de Babel/Browserslist nem Turf,
+que não estão disponíveis no Nexus corporativo mostrado nos erros.
 
 ## Builder
 

@@ -1,11 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import centroid from '@turf/centroid';
 import type { Feature, FeatureCollection, Geometry } from 'geojson';
 import { DATA_DIR, ROOT, V3_DIR, V4_DIR } from './config.js';
 import type { Pole, ScenarioData, ScenarioKind, ScenarioSummary, TerritoryUnit } from '../shared/types.js';
-import { normalizeMunicipalityCode } from '../shared/geo.js';
+import { geometryCenter, normalizeMunicipalityCode } from '../shared/geo.js';
 
 type RecordRow=Record<string,unknown>;
 const value=(r:RecordRow,...keys:string[])=>keys.map(k=>r[k]).find(v=>v!==undefined&&v!==null&&v!=='');
@@ -48,7 +47,7 @@ export async function loadScenario(id:string):Promise<ScenarioData|null> {
   })).filter(p=>p.id&&p.latitude&&p.longitude);
   const geo=JSON.parse(fs.readFileSync(path.join(summary.path,'carteiras_unidades.geojson'),'utf8')) as FeatureCollection<Geometry>;
   const units:TerritoryUnit[]=geo.features.map((f:Feature<Geometry>,i)=>{
-    const p=(f.properties||{}) as RecordRow; const c=centroid(f as any).geometry.coordinates;
+    const p=(f.properties||{}) as RecordRow; const c=geometryCenter(f.geometry);
     return {id:text(value(p,'DEMAND_ID'),`UNIDADE-${i}`),type:text(value(p,'TIPO_UNIDADE'),'MUNICIPIO').toUpperCase()==='DISTRITO'?'DISTRITO':'MUNICIPIO',
       municipalityCode:normalizeMunicipalityCode(value(p,'COD_IBGE','CD_MUN')),districtCode:text(value(p,'CD_DIST'))||undefined,
       municipalityName:text(value(p,'NM_MUN')),uf:text(value(p,'UF')),poleId:text(value(p,'GERENCIA_ID'))||null,

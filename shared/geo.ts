@@ -1,9 +1,27 @@
 import type { Pole, PoleMetrics, TerritoryUnit } from './types.js';
+import type { Geometry } from 'geojson';
 
 export const normalizeMunicipalityCode = (value: unknown) => {
   const digits = String(value ?? '').replace(/\D/g, '');
   return digits.length === 6 ? `${digits}0` : digits.slice(0, 7);
 };
+
+export function geometryCenter(geometry:Geometry):[number,number] {
+  const points:[number,number][]=[];
+  const visit=(value:unknown):void=>{
+    if(!Array.isArray(value))return;
+    if(value.length>=2&&typeof value[0]==='number'&&typeof value[1]==='number'){
+      points.push([value[0],value[1]]);return;
+    }
+    value.forEach(visit);
+  };
+  if(geometry.type==='GeometryCollection')geometry.geometries.forEach(g=>visit('coordinates' in g?g.coordinates:[]));
+  else visit(geometry.coordinates);
+  if(!points.length)return [0,0];
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  for(const [x,y] of points){minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);}
+  return [(minX+maxX)/2,(minY+maxY)/2];
+}
 
 export function haversineKm(aLat:number,aLon:number,bLat:number,bLon:number) {
   const rad = Math.PI / 180, dLat=(bLat-aLat)*rad, dLon=(bLon-aLon)*rad;
