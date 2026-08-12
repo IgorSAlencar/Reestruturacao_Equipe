@@ -220,6 +220,26 @@ def test_tiny_scip_model_is_feasible_contiguous_and_lexicographic() -> None:
     bundle = v4.build_optimization_model(
         demand, candidates, regional, distance, neighbors, cfg
     )
+    assert all(
+        variable.__class__.__name__ == "Variable"
+        for variable in bundle.population_load.values()
+    )
+    assert all(
+        variable.__class__.__name__ == "Variable"
+        for variable in bundle.store_load.values()
+    )
+    assert bundle.population_distance.__class__.__name__ == "Variable"
+    assert bundle.store_distance.__class__.__name__ == "Variable"
+    balance_constraints = [
+        constraint
+        for constraint in bundle.model.getConss()
+        if constraint.name.startswith("EQUILIBRIO_")
+    ]
+    assert len(balance_constraints) == 4 * len(candidates)
+    assert max(
+        len(bundle.model.getValsLinear(constraint))
+        for constraint in balance_constraints
+    ) <= 4
     assert v4.add_contiguous_warm_start(
         bundle, demand, candidates, regional, neighbors, cfg
     )

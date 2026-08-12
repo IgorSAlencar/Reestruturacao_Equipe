@@ -909,25 +909,50 @@ def build_optimization_model(
             "Populacao e quantidade de lojas devem ser positivas para otimizar a V4."
         )
 
+    population_share = populations / total_population
+    store_share = stores / total_stores
+
     served_store_expression = quicksum(
-        float(stores[unit]) * x[(unit, int(candidate))]
+        float(store_share[unit]) * x[(unit, int(candidate))]
         for unit, feasible in enumerate(feasible_by_unit)
         for candidate in feasible
         if stores[unit] > 0
     )
     model.addCons(
-        served_store_expression >= cfg.minimum_store_coverage * total_stores,
+        served_store_expression >= cfg.minimum_store_coverage,
         name="COBERTURA_MINIMA_95_PORCENTO_LOJAS",
     )
 
+    # As cargas precisam ser variaveis auxiliares, nao expressoes reutilizadas.
+    # Caso contrario, o PySCIPOpt expande todas as atribuicoes ao normalizar cada
+    # restricao de equilibrio: no caso real, a mesma expressao nacional era
+    # copiada 4 x 1.459 vezes e esgotava a memoria antes de iniciar o solver.
     population_load: dict[int, Any] = {}
     store_load: dict[int, Any] = {}
     for candidate, units in enumerate(feasible_by_candidate):
-        population_load[candidate] = quicksum(
-            float(populations[unit]) * x[(unit, candidate)] for unit in units
+        population_load[candidate] = model.addVar(
+            lb=0.0, ub=1.0, vtype="C", name=f"CARGA_POP_NORMALIZADA_{candidate}"
         )
-        store_load[candidate] = quicksum(
-            float(stores[unit]) * x[(unit, candidate)] for unit in units
+        store_load[candidate] = model.addVar(
+            lb=0.0, ub=1.0, vtype="C", name=f"CARGA_LOJAS_NORMALIZADA_{candidate}"
+        )
+        model.addCons(
+            population_load[candidate]
+            == quicksum(
+                float(population_share[unit]) * x[(unit, candidate)]
+                for unit in units
+                if populations[unit] > 0
+            ),
+            name=f"DEFINE_CARGA_POP_{candidate}",
+        )
+        model.addCons(
+            store_load[candidate]
+            == quicksum(
+                float(store_share[unit]) * x[(unit, candidate)]
+                for unit in units
+                if stores[unit] > 0
+            ),
+            name=f"DEFINE_CARGA_LOJAS_{candidate}",
         )
 
     balance = model.addVar(
@@ -937,29 +962,51 @@ def build_optimization_model(
         name="DESVIO_MAX_RELATIVO_A_MEDIA",
     )
 
-    served_population_average = quicksum(population_load.values()) / cfg.manager_count
-    served_store_average = quicksum(store_load.values()) / cfg.manager_count
-    population_scale = total_population / cfg.manager_count
-    store_scale = total_stores / cfg.manager_count
+    served_population_average = model.addVar(
+        lb=0.0,
+        ub=1.0 / cfg.manager_count,
+        vtype="C",
+        name="MEDIA_POPULACAO_ATENDIDA_NORMALIZADA",
+    )
+    served_store_average = model.addVar(
+        lb=0.0,
+        ub=1.0 / cfg.manager_count,
+        vtype="C",
+        name="MEDIA_LOJAS_ATENDIDAS_NORMALIZADA",
+    )
+    model.addCons(
+        cfg.manager_count * served_population_average
+        == quicksum(population_load.values()),
+        name="DEFINE_MEDIA_POPULACAO_ATENDIDA",
+    )
+    model.addCons(
+        cfg.manager_count * served_store_average == quicksum(store_load.values()),
+        name="DEFINE_MEDIA_LOJAS_ATENDIDAS",
+    )
+    normalized_average = 1.0 / cfg.manager_count
     for candidate in range(candidate_count):
         model.addCons(
             population_load[candidate] - served_population_average
-            <= population_scale * balance + total_population * (1 - y[candidate])
+            <= normalized_average * balance + (1 - y[candidate]),
+            name=f"EQUILIBRIO_POP_SUP_{candidate}",
         )
         model.addCons(
             served_population_average - population_load[candidate]
-            <= population_scale * balance + total_population * (1 - y[candidate])
+            <= normalized_average * balance + (1 - y[candidate]),
+            name=f"EQUILIBRIO_POP_INF_{candidate}",
         )
         model.addCons(
             store_load[candidate] - served_store_average
-            <= store_scale * balance + total_stores * (1 - y[candidate])
+            <= normalized_average * balance + (1 - y[candidate]),
+            name=f"EQUILIBRIO_LOJAS_SUP_{candidate}",
         )
         model.addCons(
             served_store_average - store_load[candidate]
-            <= store_scale * balance + total_stores * (1 - y[candidate])
+            <= normalized_average * balance + (1 - y[candidate]),
+            name=f"EQUILIBRIO_LOJAS_INF_{candidate}",
         )
 
-    population_distance = quicksum(
+    population_distance_expression = quicksum(
         (float(populations[unit]) / total_population)
         * float(distance[unit, int(candidate)])
         * x[(unit, int(candidate))]
@@ -967,13 +1014,34 @@ def build_optimization_model(
         for candidate in feasible
         if populations[unit] > 0
     )
-    store_distance = quicksum(
+    store_distance_expression = quicksum(
         (float(stores[unit]) / total_stores)
         * float(distance[unit, int(candidate)])
         * x[(unit, int(candidate))]
         for unit, feasible in enumerate(feasible_by_unit)
         for candidate in feasible
         if stores[unit] > 0
+    )
+    maximum_distance = float(np.max(distance))
+    population_distance = model.addVar(
+        lb=0.0,
+        ub=maximum_distance,
+        vtype="C",
+        name="DISTANCIA_PONDERADA_POPULACAO",
+    )
+    store_distance = model.addVar(
+        lb=0.0,
+        ub=maximum_distance,
+        vtype="C",
+        name="DISTANCIA_PONDERADA_LOJAS",
+    )
+    model.addCons(
+        population_distance == population_distance_expression,
+        name="DEFINE_DISTANCIA_PONDERADA_POPULACAO",
+    )
+    model.addCons(
+        store_distance == store_distance_expression,
+        name="DEFINE_DISTANCIA_PONDERADA_LOJAS",
     )
 
     logging.info(
