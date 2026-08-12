@@ -25,3 +25,10 @@ geometria_brasil/Brasil_Municipios.json
 geometria_brasil/distritos_brasil/downloads/BR_distritos_CD2022.gpkg
 geometria_brasil/distritos_brasil/saidas/distritos_brasil_pop2022.gpkg
 *.gpkg
+
+# Aplicação TypeScript local
+node_modules/
+dist/
+dist-api/
+.territorios-data/
+*.tsbuildinfo

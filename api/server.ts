@@ -1,0 +1,43 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import Fastify from 'fastify';
+import cors from '@fastify/cors';
+import { nanoid } from 'nanoid';
+import { z } from 'zod';
+import { API_PORT, DATA_DIR, MAPBOX_STYLE, MUNICIPALITIES_FILE, ROOT } from './config.js';
+import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from './db.js';
+import { listScenarios, loadCurrent, loadScenario } from './scenarios.js';
+
+const app=Fastify({logger:true,bodyLimit:50*1024*1024});
+await app.register(cors,{origin:true});
+app.get('/api/health',async()=>({ok:true,time:new Date().toISOString()}));
+app.get('/api/config',async()=>({mapboxToken:process.env.MAPBOX_ACCESS_TOKEN||'',mapboxStyle:MAPBOX_STYLE}));
+app.get('/api/scenarios',async()=>{const current=loadCurrent();return [...(current?[current.summary]:[]),...await listScenarios()]});
+app.get('/api/scenarios/current',async(_,reply)=>loadCurrent()||reply.code(404).send({message:'Cache atual ainda não foi gerado.'}));
+app.get<{Params:{id:string}}>('/api/scenarios/:id',async(req,reply)=>(await loadScenario(req.params.id))||reply.code(404).send({message:'Cenário não encontrado.'}));
+app.get('/api/geometry/municipalities',async(_,reply)=>{if(!fs.existsSync(MUNICIPALITIES_FILE))return reply.code(404).send({message:'Malha municipal não encontrada.'});reply.type('application/geo+json');return reply.send(fs.createReadStream(MUNICIPALITIES_FILE));});
+app.get('/api/drafts',async()=>listDrafts());
+app.get<{Params:{id:string}}>('/api/drafts/:id',async(req,reply)=>getDraft(req.params.id)||reply.code(404).send({message:'Rascunho não encontrado.'}));
+app.post('/api/drafts',async(req,reply)=>{const body=z.object({name:z.string().min(1),baseScenarioId:z.string(),data:z.any()}).parse(req.body);return reply.code(201).send(createDraft(nanoid(),body.name,body.baseScenarioId,body.data));});
+app.put<{Params:{id:string}}>('/api/drafts/:id',async(req,reply)=>{const b=z.object({name:z.string().min(1),revision:z.number().int(),data:z.any()}).parse(req.body);const result=updateDraft(req.params.id,b.name,b.revision,b.data);if(result==='conflict')return reply.code(409).send({message:'Este rascunho foi alterado em outra aba.'});return result||reply.code(404).send({message:'Rascunho não encontrado.'});});
+app.delete<{Params:{id:string}}>('/api/drafts/:id',async(req,reply)=>deleteDraft(req.params.id)?reply.code(204).send():reply.code(404).send({message:'Rascunho não encontrado.'}));
+app.get<{Params:{id:string}}>('/api/drafts/:id/export',async(req,reply)=>{const d=getDraft(req.params.id);if(!d)return reply.code(404).send({message:'Rascunho não encontrado.'});reply.header('content-disposition',`attachment; filename="${d.id}.json"`).type('application/json');return d;});
+app.get<{Params:{id:string}}>('/api/drafts/:id/geojson',async(req,reply)=>{
+  const d=getDraft(req.params.id);if(!d)return reply.code(404).send({message:'Rascunho não encontrado.'});
+  let base:any=d.data.territories;
+  if(!base.features.length&&fs.existsSync(MUNICIPALITIES_FILE))base=JSON.parse(fs.readFileSync(MUNICIPALITIES_FILE,'utf8'));
+  const byId=new Map(d.data.units.map(u=>[u.id,u]));const byCode=new Map<string,typeof d.data.units>();d.data.units.forEach(u=>byCode.set(u.municipalityCode,[...(byCode.get(u.municipalityCode)||[]),u]));
+  const features=base.features.flatMap((f:any)=>{const direct=byId.get(String(f.properties?.DEMAND_ID||f.properties?._unitId||''));const code=String(f.properties?.COD_IBGE||f.properties?.CD_MUN||f.properties?.id||'');const units=direct?[direct]:(byCode.get(code)||[]);return units.map(u=>({...f,properties:{...(f.properties||{}),DEMAND_ID:u.id,GERENCIA_ID:u.poleId,DISTANCIA_KM:u.distanceKm,QTD_LOJAS:u.stores,POPULACAO_UNIDADE:u.population}}));});
+  reply.header('content-disposition',`attachment; filename="${d.id}.geojson"`).type('application/geo+json');return {type:'FeatureCollection',features};
+});
+let refreshing=false,lastRefreshError:string|null=null;
+app.get('/api/current-cache/status',async()=>({available:!!loadCurrent(),refreshing,lastError:lastRefreshError,dataDir:DATA_DIR}));
+app.post('/api/current-cache/refresh',async(_,reply)=>{
+  if(refreshing)return reply.code(409).send({message:'Atualização já está em andamento.'}); refreshing=true;lastRefreshError=null;
+  const child=spawn(process.env.PYTHON_BIN||'python',[path.join(ROOT,'utils','export_current_cache.py')],{cwd:ROOT,env:process.env});let error=''; child.stderr.on('data',d=>error+=String(d));
+  child.on('close',code=>{refreshing=false;if(code!==0)lastRefreshError=error.trim()||`Python encerrou com código ${code}`;});
+  return reply.code(202).send({message:'Atualização iniciada.'});
+});
+app.setErrorHandler((error:Error & {statusCode?:number},_,reply)=>reply.code(error.statusCode||500).send({message:error.message}));
+await app.listen({host:'0.0.0.0',port:API_PORT});
