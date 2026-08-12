@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import express from 'express';
 import cors from 'cors';
 import { z } from 'zod';
-import { API_PORT, DATA_DIR, MAPBOX_STYLE, MUNICIPALITIES_FILE, ROOT } from './config.js';
+import { API_PORT, DATA_DIR, MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE, MUNICIPALITIES_FILE, ROOT } from './config.js';
 import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from './db.js';
 import { listScenarios, loadCurrent, loadScenario } from './scenarios.js';
 
@@ -13,7 +13,7 @@ const app=express();
 app.use(cors());
 app.use(express.json({limit:'50mb'}));
 app.get('/api/health',(_,res)=>res.json({ok:true,time:new Date().toISOString()}));
-app.get('/api/config',(_,res)=>res.json({mapboxToken:process.env.MAPBOX_ACCESS_TOKEN||'',mapboxStyle:MAPBOX_STYLE}));
+app.get('/api/config',(_,res)=>res.json({mapboxToken:MAPBOX_ACCESS_TOKEN,mapboxStyle:MAPBOX_STYLE}));
 app.get('/api/scenarios',async(_,res)=>{const current=loadCurrent();res.json([...(current?[current.summary]:[]),...await listScenarios()]);});
 app.get('/api/scenarios/current',(_,res)=>{const data=loadCurrent();data?res.json(data):res.status(404).json({message:'Cache atual ainda não foi gerado.'});});
 app.get('/api/scenarios/:id',async(req,res)=>{const data=await loadScenario(req.params.id);data?res.json(data):res.status(404).json({message:'Cenário não encontrado.'});});

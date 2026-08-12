@@ -10,7 +10,7 @@
     "dev": "vite --host 0.0.0.0",
     "dev:api": "node --watch api/server.js",
     "build": "tsc -b && vite build",
-    "test": "node --experimental-strip-types --test shared/geo.test.ts",
+    "test": "node --experimental-strip-types --test shared/geo.test.ts api/config.test.js",
     "typecheck": "tsc -b"
   },
   "dependencies": {

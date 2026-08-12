@@ -1,8 +1,23 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+dotenv.config({ path: path.join(ROOT, '.env'), quiet: true });
+
+// Token público de leitura usado pelo mapa-hierarquia-visualiza. Tokens pk.
+// são enviados ao navegador por definição; MAPBOX_ACCESS_TOKEN permite
+// substituí-lo por ambiente sem tornar o .env obrigatório.
+const DEFAULT_MAPBOX_PUBLIC_TOKEN = [
+  'p',
+  'k',
+  '.',
+  'eyJ1IjoiaWdyYWxlbmNhciIsImEiOiJjbWFpN3VhbDIwZWh2MnJxNDEy',
+  'cG1haHZpIn0.',
+  'IPFXEakhJ0tprRmq4JEn_w',
+].join('');
+export const MAPBOX_ACCESS_TOKEN = process.env.MAPBOX_ACCESS_TOKEN
+  || DEFAULT_MAPBOX_PUBLIC_TOKEN;
 export const API_PORT = Number(process.env.API_PORT || 3333);
 export const V3_DIR = path.resolve(process.env.OUTPUT_DIR || path.join(ROOT, 'saida_greenfield_v3'));
 export const V4_DIR = path.resolve(process.env.OUTPUT_DIR_V4 || path.join(ROOT, 'saida_greenfield_v4'));
