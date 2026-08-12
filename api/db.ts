@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { DATA_DIR } from './config.js';
-import type { DraftData, ScenarioData } from '../shared/types.js';
+import { DATA_DIR } from './config.ts';
+import type { DraftData, ScenarioData } from '../shared/types.ts';
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const db = new DatabaseSync(path.join(DATA_DIR, 'territorios.sqlite'));

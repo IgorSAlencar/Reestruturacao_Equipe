@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calculatePoleMetrics, geometryCenter, haversineKm, normalizeMunicipalityCode } from './geo.js';
+import { calculatePoleMetrics, geometryCenter, haversineKm, normalizeMunicipalityCode } from './geo.ts';
 
 describe('geography helpers',()=>{
   it('normalizes IBGE codes',()=>{ expect(normalizeMunicipalityCode('355030')).toBe('3550300'); expect(normalizeMunicipalityCode(3550308)).toBe('3550308'); });

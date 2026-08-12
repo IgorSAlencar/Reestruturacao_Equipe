@@ -2,9 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import type { Feature, FeatureCollection, Geometry } from 'geojson';
-import { DATA_DIR, ROOT, V3_DIR, V4_DIR } from './config.js';
-import type { Pole, ScenarioData, ScenarioKind, ScenarioSummary, TerritoryUnit } from '../shared/types.js';
-import { geometryCenter, normalizeMunicipalityCode } from '../shared/geo.js';
+import { DATA_DIR, ROOT, V3_DIR, V4_DIR } from './config.ts';
+import type { Pole, ScenarioData, ScenarioKind, ScenarioSummary, TerritoryUnit } from '../shared/types.ts';
+import { geometryCenter, normalizeMunicipalityCode } from '../shared/geo.ts';
 
 type RecordRow=Record<string,unknown>;
 const value=(r:RecordRow,...keys:string[])=>keys.map(k=>r[k]).find(v=>v!==undefined&&v!==null&&v!=='');

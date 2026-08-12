@@ -5,9 +5,9 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { nanoid } from 'nanoid';
 import { z } from 'zod';
-import { API_PORT, DATA_DIR, MAPBOX_STYLE, MUNICIPALITIES_FILE, ROOT } from './config.js';
-import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from './db.js';
-import { listScenarios, loadCurrent, loadScenario } from './scenarios.js';
+import { API_PORT, DATA_DIR, MAPBOX_STYLE, MUNICIPALITIES_FILE, ROOT } from './config.ts';
+import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from './db.ts';
+import { listScenarios, loadCurrent, loadScenario } from './scenarios.ts';
 
 const app=Fastify({logger:true,bodyLimit:50*1024*1024});
 await app.register(cors,{origin:true});

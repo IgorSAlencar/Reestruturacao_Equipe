@@ -1,4 +1,4 @@
-import type { Pole, PoleMetrics, TerritoryUnit } from './types.js';
+import type { Pole, PoleMetrics, TerritoryUnit } from './types.ts';
 import type { Geometry } from 'geojson';
 
 export const normalizeMunicipalityCode = (value: unknown) => {
