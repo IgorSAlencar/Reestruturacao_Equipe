@@ -37,6 +37,8 @@
   "overrides": {
     "browserslist": "4.24.2",
     "caniuse-lite": "1.0.30001806",
+    "electron-to-chromium": "1.5.45",
+    "node-releases": "2.0.18",
     "potpack": "2.0.0",
     "update-browserslist-db": "1.1.1"
   }
