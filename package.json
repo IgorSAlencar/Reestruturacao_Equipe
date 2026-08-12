@@ -17,7 +17,7 @@
     "@fastify/cors": "^11.1.0",
     "dotenv": "^17.2.2",
     "fastify": "^5.5.0",
-    "mapbox-gl": "^3.14.0",
+    "mapbox-gl": "3.13.0",
     "nanoid": "^5.1.5",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
