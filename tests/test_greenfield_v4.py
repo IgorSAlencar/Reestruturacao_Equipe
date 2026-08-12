@@ -1,3 +1,4 @@
+import time
 from dataclasses import replace
 
 import geopandas as gpd
@@ -166,6 +167,55 @@ def test_store_is_never_assigned_to_district_of_another_municipality(
     )
 
 
+def test_local_candidate_shortlist_is_capped_and_keeps_own_site() -> None:
+    cfg = replace(v4.V4Config(), max_candidates_per_unit=2)
+    demand = pd.DataFrame(
+        {
+            "DEMAND_ID": [f"U{unit}" for unit in range(5)],
+            "ATENDIMENTO_OBRIGATORIO": [True] * 5,
+            "QTD_LOJAS": [1] * 5,
+            "UF": ["SP"] * 5,
+        }
+    )
+    candidates = pd.DataFrame(
+        {
+            "DEMAND_IDX_ORIGEM_POLO": list(range(5)),
+            "UF": ["SP"] * 5,
+        }
+    )
+    distance = np.array(
+        [
+            [100.0, 1.0, 2.0, 3.0, 4.0],
+            [1.0, 100.0, 2.0, 3.0, 4.0],
+            [1.0, 2.0, 100.0, 3.0, 4.0],
+            [1.0, 2.0, 3.0, 100.0, 4.0],
+            [1.0, 2.0, 3.0, 4.0, 100.0],
+        ],
+        dtype=np.float32,
+    )
+    neighbors = {
+        0: {1},
+        1: {0, 2},
+        2: {1, 3},
+        3: {2, 4},
+        4: {3},
+    }
+
+    by_unit, by_candidate, component = v4.build_feasible_assignment_pairs(
+        demand,
+        candidates,
+        distance,
+        neighbors,
+        cfg,
+        {"SP": {"SP"}},
+    )
+
+    assert all(len(feasible) == 2 for feasible in by_unit)
+    assert all(unit in by_unit[unit] for unit in range(5))
+    assert sum(len(units) for units in by_candidate) == 10
+    assert np.unique(component).tolist() == [0]
+
+
 def test_tiny_scip_model_is_feasible_contiguous_and_lexicographic() -> None:
     pytest.importorskip("pyscipopt")
     cfg = replace(
@@ -243,6 +293,17 @@ def test_tiny_scip_model_is_feasible_contiguous_and_lexicographic() -> None:
     assert v4.add_contiguous_warm_start(
         bundle, demand, candidates, regional, neighbors, cfg
     )
+    fallback_state, fallback_report = v4.solve_objective_stage(
+        bundle,
+        candidates,
+        neighbors,
+        bundle.balance,
+        "EQUILIBRIO_POPULACAO_LOJAS",
+        time.monotonic() - 1.0,
+        cfg,
+    )
+    assert fallback_state.assignment.tolist() == [0, 0, 1, 1]
+    assert fallback_report["SOLUCAO_RETORNADA"] == "FALLBACK_CONTIGUO"
     state, reports = v4.solve_lexicographic(bundle, candidates, neighbors, cfg)
     assert state.selected == [0, 1]
     assert state.assignment.tolist() == [0, 0, 1, 1]

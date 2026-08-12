@@ -2,7 +2,7 @@
 GREENFIELD DA MALHA DE GERENCIAS - V4
 =====================================
 
-Modelo de localizacao-alocacao capacitado, contiguo e lexicografico.
+Modelo de localizacao-alocacao local, contiguo e lexicografico.
 
 Principios da V4:
 - exatamente 135 polos;
@@ -11,6 +11,7 @@ Principios da V4:
 - municipios/distritos obrigatorios e pequenos municipios opcionais;
 - cobertura de ao menos 95% das lojas fora da lista de exclusao;
 - nenhum peso arbitrario entre populacao e lojas;
+- candidatos de atendimento limitados aos polos locais mais proximos;
 - menor desequilibrio possivel, depois habitante-km, depois loja-km;
 - contiguidade certificada por cortes validos adicionados ao modelo SCIP;
 - realocacao dos 135 gerentes somente depois da malha operacional:
@@ -27,6 +28,7 @@ na funcao objetivo da V4.
 from __future__ import annotations
 
 import argparse
+import heapq
 import json
 import logging
 import os
@@ -79,7 +81,7 @@ except (ImportError, ModuleNotFoundError):  # mensagem amigavel em require_solve
     quicksum = None
 
 
-MODEL_VERSION = "V4.0_SCIP_LEXICOGRAFICO_CONTIGUO"
+MODEL_VERSION = "V4.1_SCIP_LOCAL_CONTIGUO"
 
 T_EXECUCAO = "TB_GREENFIELD_BE_EXECUCAO_V4_IGOR"
 T_CENARIO = "TB_GREENFIELD_BE_CENARIO_V4_IGOR"
@@ -106,6 +108,12 @@ class V4Config(v3.ModelConfig):
     mandatory_population_min: int = 30_000
     optional_service_radius_km: float = 150.0
     minimum_store_coverage: float = 0.95
+    max_candidates_per_unit: int = int(
+        os.getenv("GREENFIELD_V4_MAX_CANDIDATES_PER_UNIT", "24")
+    )
+    warm_start_repair_limit: int = int(
+        os.getenv("GREENFIELD_V4_WARM_START_REPAIRS", "20")
+    )
     expected_excluded_municipalities: int = 484
     excluded_municipalities_table: str = os.getenv("EXCLUDED_MUNICIPALITIES_TABLE", "")
     excluded_municipalities_sql_column: str = os.getenv(
@@ -138,11 +146,15 @@ class ModelBundle:
     store_distance: Any
     population_load: dict[int, Any]
     store_load: dict[int, Any]
+    served_population_average: Any
+    served_store_average: Any
     feasible_by_unit: list[np.ndarray]
     feasible_by_candidate: list[list[int]]
     anchor_pairs_by_regional: list[np.ndarray]
     distance: np.ndarray
     cut_count: int = 0
+    fallback_state: SolvedState | None = None
+    warm_start_contiguous: bool = False
 
 
 @dataclass
@@ -166,6 +178,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--mip-gap", type=float, default=None, help="Gap relativo alvo (padrao: 0.005)."
+    )
+    parser.add_argument(
+        "--max-candidates-per-unit",
+        type=int,
+        default=None,
+        help="Quantidade maxima de polos locais por unidade (padrao: 24).",
     )
     parser.add_argument(
         "--seed", type=int, default=None, help="Semente deterministica do SCIP."
@@ -196,6 +214,8 @@ def config_from_args(args: argparse.Namespace) -> V4Config:
         updates["time_limit_seconds"] = args.time_limit
     if args.mip_gap is not None:
         updates["mip_gap"] = args.mip_gap
+    if args.max_candidates_per_unit is not None:
+        updates["max_candidates_per_unit"] = args.max_candidates_per_unit
     if args.seed is not None:
         updates["random_seed"] = args.seed
     if args.output_dir is not None:
@@ -213,6 +233,10 @@ def config_from_args(args: argparse.Namespace) -> V4Config:
         raise ValueError("--time-limit deve ser positivo.")
     if not 0 <= cfg.mip_gap < 1:
         raise ValueError("--mip-gap deve estar no intervalo [0, 1).")
+    if cfg.max_candidates_per_unit < 2:
+        raise ValueError("--max-candidates-per-unit deve ser pelo menos 2.")
+    if cfg.warm_start_repair_limit < 1:
+        raise ValueError("GREENFIELD_V4_WARM_START_REPAIRS deve ser positivo.")
     if not np.isclose(
         cfg.balance_time_share
         + cfg.population_distance_time_share
@@ -717,18 +741,38 @@ def build_feasible_assignment_pairs(
     candidate_uf = candidates["UF"].astype(str).to_numpy()
     demand_uf = demand["UF"].astype(str).to_numpy()
     mandatory = demand["ATENDIMENTO_OBRIGATORIO"].to_numpy(bool)
+    root_candidate = {
+        int(root): int(candidate)
+        for candidate, root in enumerate(candidate_root)
+    }
 
     state_adjacency = state_adjacency or build_state_adjacency(demand, neighbors)
     allowed_ufs = [state_adjacency[demand_uf[unit]] for unit in range(len(demand))]
 
     by_unit: list[np.ndarray] = []
     by_candidate: list[list[int]] = [[] for _ in range(len(candidates))]
+    eligible_pair_count = 0
     for unit in range(len(demand)):
         mask = candidate_component == component[unit]
         mask &= np.isin(candidate_uf, list(allowed_ufs[unit]))
         if not mandatory[unit]:
             mask &= distance[unit] <= cfg.optional_service_radius_km + 1e-7
-        feasible = np.flatnonzero(mask).astype(int)
+        eligible = np.flatnonzero(mask).astype(int)
+        eligible_pair_count += len(eligible)
+        ordered = eligible[
+            np.argsort(distance[unit, eligible], kind="stable")
+        ]
+        own_candidate = root_candidate.get(unit)
+        if own_candidate is not None and own_candidate in set(eligible.tolist()):
+            nearest = ordered[ordered != own_candidate][
+                : cfg.max_candidates_per_unit - 1
+            ]
+            feasible = np.concatenate(
+                [np.array([own_candidate], dtype=int), nearest.astype(int)]
+            )
+        else:
+            feasible = ordered[: cfg.max_candidates_per_unit].astype(int)
+        feasible = np.unique(feasible)
         if mandatory[unit] and not len(feasible):
             raise RuntimeError(
                 f"Unidade obrigatoria {demand.iloc[unit]['DEMAND_ID']} sem polo candidato viavel."
@@ -736,6 +780,16 @@ def build_feasible_assignment_pairs(
         by_unit.append(feasible)
         for candidate in feasible:
             by_candidate[int(candidate)].append(unit)
+
+    retained_pair_count = sum(len(values) for values in by_unit)
+    reduction = 1.0 - retained_pair_count / max(eligible_pair_count, 1)
+    logging.info(
+        "Shortlist local: %s de %s pares mantidos (%.1f%% de reducao, maximo %s por unidade)",
+        retained_pair_count,
+        eligible_pair_count,
+        reduction * 100,
+        cfg.max_candidates_per_unit,
+    )
 
     for candidate, root in enumerate(candidate_root):
         if candidate not in set(by_unit[int(root)].tolist()):
@@ -1061,11 +1115,251 @@ def build_optimization_model(
         store_distance=store_distance,
         population_load=population_load,
         store_load=store_load,
+        served_population_average=served_population_average,
+        served_store_average=served_store_average,
         feasible_by_unit=feasible_by_unit,
         feasible_by_candidate=feasible_by_candidate,
         anchor_pairs_by_regional=anchor_pairs,
         distance=distance,
     )
+
+
+def grow_contiguous_warm_assignment(
+    feasible_cost: np.ndarray,
+    selected: list[int],
+    candidates: pd.DataFrame,
+    neighbors: dict[int, set[int]],
+    loads: np.ndarray,
+    cfg: V4Config,
+) -> np.ndarray:
+    """Particiona por crescimento local e devolve tambem eventuais lacunas."""
+    position = np.full(feasible_cost.shape[0], -1, dtype=int)
+    cluster_load = np.zeros(len(selected), dtype=float)
+    target = max(float(loads.sum()) / max(len(selected), 1), 1e-9)
+    heap: list[tuple[float, int, int]] = []
+
+    def offer(unit: int, cluster: int) -> None:
+        if position[unit] >= 0:
+            return
+        candidate = selected[cluster]
+        if feasible_cost[unit, candidate] >= v3.PROHIBITED_SERVICE_COST:
+            return
+        pressure = max((cluster_load[cluster] + loads[unit]) / target - 1.0, 0.0)
+        score = float(feasible_cost[unit, candidate])
+        score += cfg.contiguous_growth_load_penalty_km * pressure
+        heapq.heappush(heap, (score, unit, cluster))
+
+    for cluster, candidate in enumerate(selected):
+        root = int(candidates.iloc[int(candidate)]["DEMAND_IDX_ORIGEM_POLO"])
+        if position[root] >= 0:
+            raise RuntimeError("Dois polos selecionados para a mesma unidade territorial.")
+        position[root] = cluster
+        cluster_load[cluster] += loads[root]
+    for unit in np.flatnonzero(position >= 0):
+        cluster = int(position[unit])
+        for adjacent in neighbors.get(int(unit), set()):
+            offer(int(adjacent), cluster)
+
+    while heap:
+        _, unit, cluster = heapq.heappop(heap)
+        if position[unit] >= 0:
+            continue
+        if not any(
+            int(position[adjacent]) == cluster
+            for adjacent in neighbors.get(unit, set())
+        ):
+            continue
+        position[unit] = cluster
+        cluster_load[cluster] += loads[unit]
+        for adjacent in neighbors.get(unit, set()):
+            offer(int(adjacent), cluster)
+    return position
+
+
+def nearest_feasible_warm_assignment(
+    bundle: ModelBundle, selected: list[int], candidates: pd.DataFrame
+) -> np.ndarray:
+    """Cria incumbente do MIP mesmo se o crescimento contiguo precisar de cortes."""
+    selected_set = set(selected)
+    assignment = np.full(len(bundle.feasible_by_unit), -1, dtype=int)
+    for unit, feasible in enumerate(bundle.feasible_by_unit):
+        choices = np.array(
+            [int(candidate) for candidate in feasible if int(candidate) in selected_set],
+            dtype=int,
+        )
+        if len(choices):
+            assignment[unit] = int(
+                choices[np.argmin(bundle.distance[unit, choices])]
+            )
+    for candidate in selected:
+        root = int(candidates.iloc[int(candidate)]["DEMAND_IDX_ORIGEM_POLO"])
+        assignment[root] = int(candidate)
+    return assignment
+
+
+def warm_assignment_status(
+    assignment: np.ndarray, demand: pd.DataFrame
+) -> tuple[np.ndarray, float]:
+    mandatory = demand["ATENDIMENTO_OBRIGATORIO"].to_numpy(bool)
+    missing = np.flatnonzero(mandatory & (assignment < 0))
+    stores = demand["QTD_LOJAS"].to_numpy(float)
+    coverage = float(stores[assignment >= 0].sum()) / max(float(stores.sum()), 1.0)
+    return missing, coverage
+
+
+def best_store_coverage_seed(
+    unserved: np.ndarray,
+    selected: list[int],
+    bundle: ModelBundle,
+    demand: pd.DataFrame,
+) -> int | None:
+    stores = demand["QTD_LOJAS"].to_numpy(float)
+    selected_set = set(selected)
+    gain: defaultdict[int, float] = defaultdict(float)
+    distance_cost: defaultdict[int, float] = defaultdict(float)
+    for unit in unserved:
+        if stores[int(unit)] <= 0:
+            continue
+        for candidate in bundle.feasible_by_unit[int(unit)]:
+            candidate = int(candidate)
+            if candidate in selected_set:
+                continue
+            gain[candidate] += float(stores[int(unit)])
+            distance_cost[candidate] += float(
+                stores[int(unit)] * bundle.distance[int(unit), candidate]
+            )
+    if not gain:
+        return None
+    return min(gain, key=lambda candidate: (-gain[candidate], distance_cost[candidate], candidate))
+
+
+def build_warm_start_assignment(
+    bundle: ModelBundle,
+    demand: pd.DataFrame,
+    candidates: pd.DataFrame,
+    anchor_candidates: list[int],
+    neighbors: dict[int, set[int]],
+    cfg: V4Config,
+) -> tuple[list[int], np.ndarray, bool]:
+    mandatory = demand["ATENDIMENTO_OBRIGATORIO"].to_numpy(bool)
+    population = demand["POPULACAO_UNIDADE"].to_numpy(float)
+    stores = demand["QTD_LOJAS"].to_numpy(float)
+    warm_priority = population / max(float(population.sum()), 1.0)
+    warm_priority += stores / max(float(stores.sum()), 1.0)
+    warm_priority = np.maximum(warm_priority, 1e-9)
+
+    required, _ = v3.ensure_strategic_component_seeds(
+        anchor_candidates,
+        candidates,
+        neighbors,
+        mandatory,
+        cfg.manager_count,
+    )
+    required = list(dict.fromkeys(int(candidate) for candidate in required))
+    candidate_by_root = {
+        int(row.DEMAND_IDX_ORIGEM_POLO): int(row.CANDIDATE_IDX)
+        for row in candidates.itertuples(index=False)
+    }
+    feasible_cost = np.full(
+        bundle.distance.shape, v3.PROHIBITED_SERVICE_COST, dtype=np.float32
+    )
+    for unit, feasible in enumerate(bundle.feasible_by_unit):
+        feasible_cost[unit, feasible] = bundle.distance[unit, feasible]
+
+    last_selected: list[int] = []
+    last_base = np.full(len(demand), -1, dtype=int)
+    for attempt in range(1, cfg.warm_start_repair_limit + 1):
+        if len(required) > cfg.manager_count:
+            raise RuntimeError(
+                f"O warm start exige {len(required)} sementes para somente {cfg.manager_count} polos."
+            )
+        selected = v3.greedy_p_median_v3(
+            feasible_cost,
+            warm_priority,
+            np.zeros(len(candidates), dtype=float),
+            cfg.manager_count,
+            cfg.distance_chunk_size,
+            required,
+        )
+        base_assignment = nearest_feasible_warm_assignment(
+            bundle, selected, candidates
+        )
+        base_missing, base_coverage = warm_assignment_status(base_assignment, demand)
+        additions: list[int] = []
+        for unit in base_missing:
+            candidate = candidate_by_root.get(int(unit))
+            if candidate is not None and candidate not in required:
+                additions.append(candidate)
+
+        if not len(base_missing) and base_coverage + 1e-12 >= cfg.minimum_store_coverage:
+            position = grow_contiguous_warm_assignment(
+                feasible_cost,
+                selected,
+                candidates,
+                neighbors,
+                warm_priority,
+                cfg,
+            )
+            contiguous_assignment = np.full(len(demand), -1, dtype=int)
+            served = position >= 0
+            contiguous_assignment[served] = np.asarray(selected, dtype=int)[
+                position[served]
+            ]
+            missing, coverage = warm_assignment_status(contiguous_assignment, demand)
+            if not len(missing) and coverage + 1e-12 >= cfg.minimum_store_coverage:
+                logging.info(
+                    "Warm start territorial viavel na tentativa %s | cobertura %.2f%%",
+                    attempt,
+                    coverage * 100,
+                )
+                return selected, contiguous_assignment, True
+            for unit in missing:
+                candidate = candidate_by_root.get(int(unit))
+                if candidate is not None and candidate not in required:
+                    additions.append(candidate)
+            if coverage + 1e-12 < cfg.minimum_store_coverage:
+                coverage_seed = best_store_coverage_seed(
+                    np.flatnonzero(contiguous_assignment < 0),
+                    selected,
+                    bundle,
+                    demand,
+                )
+                if coverage_seed is not None and coverage_seed not in required:
+                    additions.append(coverage_seed)
+        elif base_coverage + 1e-12 < cfg.minimum_store_coverage:
+            coverage_seed = best_store_coverage_seed(
+                np.flatnonzero(base_assignment < 0),
+                selected,
+                bundle,
+                demand,
+            )
+            if coverage_seed is not None and coverage_seed not in required:
+                additions.append(coverage_seed)
+
+        last_selected = selected
+        last_base = base_assignment
+        capacity = cfg.manager_count - len(required)
+        additions = list(dict.fromkeys(additions))[:capacity]
+        if not additions:
+            break
+        required.extend(additions)
+        logging.info(
+            "Reparo warm start %s/%s: %s novas sementes territoriais",
+            attempt,
+            cfg.warm_start_repair_limit,
+            len(additions),
+        )
+
+    missing, coverage = warm_assignment_status(last_base, demand)
+    if len(missing) or coverage + 1e-12 < cfg.minimum_store_coverage:
+        raise RuntimeError(
+            f"Warm start base inviavel: {len(missing)} obrigatorias sem atendimento e "
+            f"cobertura de lojas {coverage:.2%}."
+        )
+    logging.warning(
+        "Warm start base viavel, mas ainda nao contiguo; o SCIP aplicara cortes progressivos."
+    )
+    return last_selected, last_base, False
 
 
 def add_contiguous_warm_start(
@@ -1076,7 +1370,7 @@ def add_contiguous_warm_start(
     neighbors: dict[int, set[int]],
     cfg: V4Config,
 ) -> bool:
-    """Entrega ao SCIP uma solucao inicial viavel; nao altera os objetivos V4."""
+    """Entrega ao SCIP uma solucao inicial viavel e tenta certificar contiguidade."""
     try:
         anchor_pairs, anchor_distance = build_anchor_pairs(regional, candidates, cfg)
         anchor_cost = np.full(anchor_distance.shape, 1e9, dtype=float)
@@ -1084,58 +1378,23 @@ def add_contiguous_warm_start(
             anchor_cost[regional_idx, feasible] = anchor_distance[
                 regional_idx, feasible
             ]
-        regional_rows, anchor_candidates = linear_sum_assignment(anchor_cost)
+        regional_rows, anchor_candidates_array = linear_sum_assignment(anchor_cost)
         if len(regional_rows) != len(regional):
             return False
-        preselected = [int(candidate) for candidate in anchor_candidates]
-
-        mandatory = demand["ATENDIMENTO_OBRIGATORIO"].to_numpy(bool)
-        preselected, _ = v3.ensure_strategic_component_seeds(
-            preselected,
+        anchor_candidates = [int(candidate) for candidate in anchor_candidates_array]
+        selected, assignment, contiguous = build_warm_start_assignment(
+            bundle,
+            demand,
             candidates,
+            anchor_candidates,
             neighbors,
-            mandatory,
-            cfg.manager_count,
-        )
-        population = demand["POPULACAO_UNIDADE"].to_numpy(float)
-        stores = demand["QTD_LOJAS"].to_numpy(float)
-        # Normalizacao usada apenas para obter rapidamente um incumbente. Ela
-        # nao entra no modelo nem em nenhum dos tres objetivos certificados.
-        warm_priority = population / max(float(population.sum()), 1.0)
-        warm_priority += stores / max(float(stores.sum()), 1.0)
-        warm_priority = np.maximum(warm_priority, 1e-9)
-
-        feasible_cost = np.full(
-            bundle.distance.shape, v3.PROHIBITED_SERVICE_COST, dtype=np.float32
-        )
-        for unit, feasible in enumerate(bundle.feasible_by_unit):
-            feasible_cost[unit, feasible] = bundle.distance[unit, feasible]
-        selected = v3.greedy_p_median_v3(
-            feasible_cost,
-            warm_priority,
-            np.zeros(len(candidates), dtype=float),
-            cfg.manager_count,
-            cfg.distance_chunk_size,
-            preselected,
-        )
-        position = v3.assign_contiguous_regions(
-            feasible_cost,
-            selected,
-            candidates,
-            neighbors,
-            warm_priority,
-            mandatory,
             cfg,
         )
-        if np.any((position < 0) & mandatory):
-            return False
-        assignment = np.full(len(demand), -1, dtype=int)
-        served = position >= 0
-        assignment[served] = np.asarray(selected, dtype=int)[position[served]]
-        coverage = float(stores[served].sum()) / max(float(stores.sum()), 1.0)
-        if coverage + 1e-12 < cfg.minimum_store_coverage:
-            return False
 
+        population = demand["POPULACAO_UNIDADE"].to_numpy(float)
+        stores = demand["QTD_LOJAS"].to_numpy(float)
+        total_population = max(float(population.sum()), 1.0)
+        total_stores = max(float(stores.sum()), 1.0)
         solution = bundle.model.createSol()
         selected_set = set(selected)
         for candidate, variable in bundle.y.items():
@@ -1146,48 +1405,108 @@ def add_contiguous_warm_start(
             )
         anchor_choice = {
             int(regional_idx): int(candidate)
-            for regional_idx, candidate in zip(regional_rows, anchor_candidates)
+            for regional_idx, candidate in zip(regional_rows, anchor_candidates_array)
         }
         for (regional_idx, candidate), variable in bundle.anchor.items():
             bundle.model.setSolVal(
                 solution, variable, float(anchor_choice[regional_idx] == candidate)
             )
 
-        population_loads = np.array(
-            [population[assignment == candidate].sum() for candidate in selected],
-            dtype=float,
+        population_loads = np.zeros(len(candidates), dtype=float)
+        store_loads = np.zeros(len(candidates), dtype=float)
+        for candidate in selected:
+            population_loads[candidate] = float(
+                population[assignment == candidate].sum()
+            )
+            store_loads[candidate] = float(stores[assignment == candidate].sum())
+        population_loads /= total_population
+        store_loads /= total_stores
+        for candidate, variable in bundle.population_load.items():
+            bundle.model.setSolVal(solution, variable, population_loads[candidate])
+        for candidate, variable in bundle.store_load.items():
+            bundle.model.setSolVal(solution, variable, store_loads[candidate])
+
+        served_population_average = float(population_loads.sum()) / cfg.manager_count
+        served_store_average = float(store_loads.sum()) / cfg.manager_count
+        bundle.model.setSolVal(
+            solution, bundle.served_population_average, served_population_average
         )
-        store_loads = np.array(
-            [stores[assignment == candidate].sum() for candidate in selected],
-            dtype=float,
+        bundle.model.setSolVal(
+            solution, bundle.served_store_average, served_store_average
         )
-        served_population_average = float(population_loads.mean())
-        served_store_average = float(store_loads.mean())
+        normalized_average = 1.0 / cfg.manager_count
         balance = max(
-            float(np.max(np.abs(population_loads - served_population_average)))
-            / max(float(population.sum()) / cfg.manager_count, 1e-9),
-            float(np.max(np.abs(store_loads - served_store_average)))
-            / max(float(stores.sum()) / cfg.manager_count, 1e-9),
+            max(
+                abs(population_loads[candidate] - served_population_average)
+                for candidate in selected
+            )
+            / normalized_average,
+            max(
+                abs(store_loads[candidate] - served_store_average)
+                for candidate in selected
+            )
+            / normalized_average,
         )
         bundle.model.setSolVal(solution, bundle.balance, balance)
-        accepted = bool(bundle.model.addSol(solution, free=True))
+        served_units = np.flatnonzero(assignment >= 0)
+        population_distance = float(
+            np.sum(
+                population[served_units]
+                / total_population
+                * bundle.distance[served_units, assignment[served_units]]
+            )
+        )
+        store_distance = float(
+            np.sum(
+                stores[served_units]
+                / total_stores
+                * bundle.distance[served_units, assignment[served_units]]
+            )
+        )
+        bundle.model.setSolVal(
+            solution, bundle.population_distance, population_distance
+        )
+        bundle.model.setSolVal(solution, bundle.store_distance, store_distance)
+
+        accepted = bool(bundle.model.addSol(solution, free=False))
+        coverage = float(stores[assignment >= 0].sum()) / total_stores
+        if accepted and contiguous:
+            bundle.fallback_state = SolvedState(
+                selected=selected,
+                assignment=assignment.copy(),
+                anchor_candidate=anchor_choice,
+                solution=solution,
+            )
+        bundle.warm_start_contiguous = bool(accepted and contiguous)
         logging.info(
-            "Warm start contiguo %s | cobertura lojas %.2f%% | equilibrio %.6f",
+            "Warm start %s %s | cobertura lojas %.2f%% | equilibrio %.6f",
+            "territorial" if contiguous else "base",
             "aceito" if accepted else "rejeitado",
             coverage * 100,
             balance,
         )
         return accepted
     except Exception as exc:
-        logging.warning("Nao foi possivel gerar warm start contiguo: %s", exc)
+        logging.warning("Nao foi possivel gerar warm start viavel: %s", exc)
         return False
 
 
-def extract_solved_state(bundle: ModelBundle) -> SolvedState:
+def extract_solved_state(
+    bundle: ModelBundle, solution: Any | None = None
+) -> SolvedState:
     model = bundle.model
-    solution = model.getBestSol()
     if solution is None:
-        raise RuntimeError("O SCIP nao encontrou nenhuma solucao inteira viavel.")
+        solution = model.getBestSol()
+    if solution is None:
+        status = str(model.getStatus())
+        if status.lower() == "timelimit":
+            raise RuntimeError(
+                "O SCIP atingiu o limite de tempo sem produzir incumbente; "
+                "isso nao comprova que o modelo seja inviavel."
+            )
+        raise RuntimeError(
+            f"O SCIP terminou com status {status} sem solucao inteira viavel."
+        )
     selected = sorted(
         candidate
         for candidate, variable in bundle.y.items()
@@ -1292,13 +1611,30 @@ def solve_objective_stage(
     model.setObjective(objective, "minimize")
     stage_started = time.monotonic()
     solve_calls = 0
+    state: SolvedState | None = None
+    fallback = bundle.fallback_state
+    used_fallback = False
+    status = "NAO_EXECUTADO_LIMITE_TEMPO"
+    dual_bound = np.nan
+    gap = np.nan
+    solving_time = 0.0
+    solving_nodes = 0
+    solving_solutions = 0
 
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0.25:
-            raise RuntimeError(
-                f"O tempo reservado ao objetivo {stage_name} terminou antes de obter solucao contigua."
+            if fallback is None:
+                raise RuntimeError(
+                    f"O tempo reservado ao objetivo {stage_name} terminou sem solucao contigua viavel."
+                )
+            state = fallback
+            used_fallback = True
+            logging.warning(
+                "SCIP %s atingiu o limite; mantendo a melhor solucao contigua viavel.",
+                stage_name,
             )
+            break
         _set_scip_param(model, "limits/time", max(remaining, 0.5))
         _set_scip_param(model, "limits/gap", cfg.mip_gap)
         logging.info(
@@ -1309,16 +1645,37 @@ def solve_objective_stage(
         )
         model.optimize()
         solve_calls += 1
-        state = extract_solved_state(bundle)
+        status = str(model.getStatus())
+        dual_bound = float(_solver_metric(model.getDualbound))
+        gap = float(_solver_metric(model.getGap))
+        solving_time = float(_solver_metric(model.getSolvingTime, 0.0))
+        solving_nodes = int(_solver_metric(model.getNNodes, 0))
+        solving_solutions = int(_solver_metric(model.getNSols, 0))
+        best_solution = model.getBestSol()
+        if best_solution is None:
+            if fallback is None:
+                state = extract_solved_state(bundle)
+            else:
+                state = fallback
+                used_fallback = True
+                logging.warning(
+                    "SCIP %s nao gerou novo incumbente; preservando o warm start contiguo.",
+                    stage_name,
+                )
+                break
+        else:
+            state = extract_solved_state(bundle, best_solution)
         specs = disconnected_cut_specs(state, candidates, neighbors, bundle)
         if not specs:
+            fallback = state
+            bundle.fallback_state = state
             break
         add_connectivity_cuts(bundle, specs, stage_name)
 
+    if state is None:
+        raise RuntimeError(f"A etapa {stage_name} terminou sem estado de solucao.")
+    bundle.fallback_state = state
     objective_value = float(model.getSolVal(state.solution, objective))
-    status = str(model.getStatus())
-    dual_bound = float(_solver_metric(model.getDualbound))
-    gap = float(_solver_metric(model.getGap))
     report = {
         "ETAPA": stage_name,
         "ORDEM_LEXICOGRAFICA": {
@@ -1330,13 +1687,14 @@ def solve_objective_stage(
         "LIMITE_DUAL": dual_bound,
         "GAP_RELATIVO": gap,
         "STATUS_SCIP": status,
-        "OTIMO_COMPROVADO": status.lower() == "optimal",
-        "TEMPO_ETAPA_SEGUNDOS": time.monotonic() - stage_started,
-        "TEMPO_SCIP_ACUMULADO_SEGUNDOS": float(
-            _solver_metric(model.getSolvingTime, 0.0)
+        "OTIMO_COMPROVADO": status.lower() == "optimal" and not used_fallback,
+        "SOLUCAO_RETORNADA": (
+            "FALLBACK_CONTIGUO" if used_fallback else "MELHOR_SCIP"
         ),
-        "NOS_SCIP": int(_solver_metric(model.getNNodes, 0)),
-        "SOLUCOES_SCIP": int(_solver_metric(model.getNSols, 0)),
+        "TEMPO_ETAPA_SEGUNDOS": time.monotonic() - stage_started,
+        "TEMPO_SCIP_ACUMULADO_SEGUNDOS": solving_time,
+        "NOS_SCIP": solving_nodes,
+        "SOLUCOES_SCIP": solving_solutions,
         "CHAMADAS_SOLVER": solve_calls,
         "CORTES_CONTIGUIDADE_ACUMULADOS": bundle.cut_count,
     }
@@ -2378,6 +2736,7 @@ def main(argv: list[str] | None = None) -> None:
         "LIMIAR_DISTRITALIZACAO": cfg.large_city_threshold,
         "LIMIAR_ATENDIMENTO_OBRIGATORIO": cfg.mandatory_population_min,
         "COBERTURA_MINIMA_LOJAS": cfg.minimum_store_coverage,
+        "MAX_CANDIDATOS_POR_UNIDADE": cfg.max_candidates_per_unit,
         "LIMITE_TEMPO_SEGUNDOS": cfg.time_limit_seconds,
         "MIP_GAP_ALVO": cfg.mip_gap,
         "SEED": cfg.random_seed,
@@ -2574,6 +2933,7 @@ def main(argv: list[str] | None = None) -> None:
                 "QTD_METROPOLES_DISTRITALIZADAS": len(split),
                 "QTD_CANDIDATOS": len(candidates),
                 "QTD_PARES_ATRIBUICAO": len(bundle.x),
+                "WARM_START_CONTIGUO": bundle.warm_start_contiguous,
                 "QTD_CORTES_CONTIGUIDADE": bundle.cut_count,
                 "QTD_MUNICIPIOS_EXCLUIDOS": len(excluded),
                 "TODAS_ETAPAS_OTIMAS_COMPROVADAS": bool(
