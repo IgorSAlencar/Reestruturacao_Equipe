@@ -17,9 +17,10 @@ A API descobre automaticamente cenários completos nas pastas `saida_greenfield_
 
 Se uma tentativa anterior deixou `node_modules` parcialmente instalado, feche
 terminais Node/Vite e o Explorer do VS Code dentro de `node_modules`, remova a
-pasta e execute `npm ci`. O projeto não depende de Babel/Browserslist, Turf ou
-`tsx`, que não estão disponíveis no Nexus corporativo mostrado nos erros. A API
-usa diretamente o suporte nativo a TypeScript do Node 22.11.
+pasta e execute `npm ci`. As versões de React, Vite, Tailwind, TypeScript,
+Mapbox, Express e demais pacotes foram alinhadas ao repositório
+`mapa-hierarquia-visualiza`, já homologado no Nexus corporativo. A API roda em
+JavaScript puro e não depende de `tsx`.
 
 ## Builder
 

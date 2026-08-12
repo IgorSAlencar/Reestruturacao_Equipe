@@ -1,0 +1,38 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import express from 'express';
+import cors from 'cors';
+import { z } from 'zod';
+import { API_PORT, DATA_DIR, MAPBOX_STYLE, MUNICIPALITIES_FILE, ROOT } from './config.js';
+import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from './db.js';
+import { listScenarios, loadCurrent, loadScenario } from './scenarios.js';
+
+const app=express();
+app.use(cors());
+app.use(express.json({limit:'50mb'}));
+app.get('/api/health',(_,res)=>res.json({ok:true,time:new Date().toISOString()}));
+app.get('/api/config',(_,res)=>res.json({mapboxToken:process.env.MAPBOX_ACCESS_TOKEN||'',mapboxStyle:MAPBOX_STYLE}));
+app.get('/api/scenarios',async(_,res)=>{const current=loadCurrent();res.json([...(current?[current.summary]:[]),...await listScenarios()]);});
+app.get('/api/scenarios/current',(_,res)=>{const data=loadCurrent();data?res.json(data):res.status(404).json({message:'Cache atual ainda não foi gerado.'});});
+app.get('/api/scenarios/:id',async(req,res)=>{const data=await loadScenario(req.params.id);data?res.json(data):res.status(404).json({message:'Cenário não encontrado.'});});
+app.get('/api/geometry/municipalities',(_,res)=>fs.existsSync(MUNICIPALITIES_FILE)?res.type('application/geo+json').sendFile(MUNICIPALITIES_FILE):res.status(404).json({message:'Malha municipal não encontrada.'}));
+app.get('/api/drafts',(_,res)=>res.json(listDrafts()));
+app.get('/api/drafts/:id',(req,res)=>{const d=getDraft(req.params.id);d?res.json(d):res.status(404).json({message:'Rascunho não encontrado.'});});
+app.post('/api/drafts',(req,res)=>{const b=z.object({name:z.string().min(1),baseScenarioId:z.string(),data:z.any()}).parse(req.body);res.status(201).json(createDraft(randomUUID(),b.name,b.baseScenarioId,b.data));});
+app.put('/api/drafts/:id',(req,res)=>{const b=z.object({name:z.string().min(1),revision:z.number().int(),data:z.any()}).parse(req.body),result=updateDraft(req.params.id,b.name,b.revision,b.data);if(result==='conflict')return res.status(409).json({message:'Este rascunho foi alterado em outra aba.'});return result?res.json(result):res.status(404).json({message:'Rascunho não encontrado.'});});
+app.delete('/api/drafts/:id',(req,res)=>deleteDraft(req.params.id)?res.sendStatus(204):res.status(404).json({message:'Rascunho não encontrado.'}));
+app.get('/api/drafts/:id/export',(req,res)=>{const d=getDraft(req.params.id);if(!d)return res.status(404).json({message:'Rascunho não encontrado.'});res.attachment(`${d.id}.json`).json(d);});
+app.get('/api/drafts/:id/geojson',(req,res)=>{
+  const d=getDraft(req.params.id);if(!d)return res.status(404).json({message:'Rascunho não encontrado.'});let base=d.data.territories;
+  if(!base.features.length&&fs.existsSync(MUNICIPALITIES_FILE))base=JSON.parse(fs.readFileSync(MUNICIPALITIES_FILE,'utf8'));
+  const byId=new Map(d.data.units.map(u=>[u.id,u])),byCode=new Map();d.data.units.forEach(u=>byCode.set(u.municipalityCode,[...(byCode.get(u.municipalityCode)||[]),u]));
+  const features=base.features.flatMap(f=>{const direct=byId.get(String(f.properties?.DEMAND_ID||f.properties?._unitId||'')),code=String(f.properties?.COD_IBGE||f.properties?.CD_MUN||f.properties?.id||''),units=direct?[direct]:(byCode.get(code)||[]);return units.map(u=>({...f,properties:{...(f.properties||{}),DEMAND_ID:u.id,GERENCIA_ID:u.poleId,DISTANCIA_KM:u.distanceKm,QTD_LOJAS:u.stores,POPULACAO_UNIDADE:u.population}}));});
+  res.attachment(`${d.id}.geojson`).type('application/geo+json').json({type:'FeatureCollection',features});
+});
+let refreshing=false,lastRefreshError=null;
+app.get('/api/current-cache/status',(_,res)=>res.json({available:!!loadCurrent(),refreshing,lastError:lastRefreshError,dataDir:DATA_DIR}));
+app.post('/api/current-cache/refresh',(_,res)=>{if(refreshing)return res.status(409).json({message:'Atualização já está em andamento.'});refreshing=true;lastRefreshError=null;const child=spawn(process.env.PYTHON_BIN||'python',[path.join(ROOT,'utils','export_current_cache.py')],{cwd:ROOT,env:process.env});let error='';child.stderr.on('data',d=>error+=String(d));child.on('close',code=>{refreshing=false;if(code!==0)lastRefreshError=error.trim()||`Python encerrou com código ${code}`;});res.status(202).json({message:'Atualização iniciada.'});});
+app.use((error,_,res,__)=>res.status(error.status||500).json({message:error.message}));
+app.listen(API_PORT,'0.0.0.0',()=>console.log(`API: http://0.0.0.0:${API_PORT}`));
