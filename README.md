@@ -23,8 +23,9 @@ A API descobre automaticamente cenários completos nas pastas `saida_greenfield_
 
 A conexão SQL da visão **Atual** usa diretamente o pacote Node `mssql`, com as
 variáveis `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`, `SQL_PASSWORD`, `SQL_DOMAIN`
-e `SQL_INSTANCE`. É possível testar a conexão em `GET /api/sql/health`; a rota
-não devolve senha nem outras credenciais.
+e `SQL_INSTANCE`. `SQL_TRUSTED_CONNECTION=true` mantém a conexão confiável
+habilitada por padrão, seguindo a configuração corporativa. É possível testar
+a conexão em `GET /api/sql/health`; a rota não devolve senha nem credenciais.
 
 Se uma tentativa anterior deixou `node_modules` parcialmente instalado, feche
 terminais Node/Vite e o Explorer do VS Code dentro de `node_modules`, remova a

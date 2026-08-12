@@ -21,7 +21,7 @@ export function getSqlConfig(env = process.env) {
     domain: env.SQL_DOMAIN || 'CORP',
     options: {
       instanceName: env.SQL_INSTANCE || 'MSSQL2008A',
-      trustedConnection: true,
+      trustedConnection: asBoolean(env.SQL_TRUSTED_CONNECTION, true),
       encrypt: asBoolean(env.SQL_ENCRYPT, false),
       trustServerCertificate: asBoolean(env.SQL_TRUST_SERVER_CERTIFICATE, true),
       enableArithAbort: true,
