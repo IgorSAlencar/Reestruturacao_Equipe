@@ -21,6 +21,7 @@ type Props={
   excludedCodes:string[];
   showRegionals:boolean;
   regionals:RegionalOffice[];
+  showPoles:boolean;
   editable:boolean;
   radiusKm:number;
   onPole:(id:string)=>void;
@@ -54,8 +55,38 @@ const STANDARD_STYLE='mapbox://styles/mapbox/standard';
 const WAVE_PERIOD_MS=5200;
 const WAVE_MAX_OFFSET_M=14000;
 const WAVE_FRONTS=2;
+const MARKER_OVERLAP_RADIUS_PX=12;
 
 const emptyPoints=():FeatureCollection=>({type:'FeatureCollection',features:[]});
+const poleFeatures=(m:MapboxMap,p:Props,moved?:{id:string;longitude:number;latitude:number})=>{
+  if(!p.showPoles||!p.data)return[];
+  const visibleRegionals=p.showRegionals?p.regionals:[];
+  return p.data.poles
+    .filter(pole=>!p.selectedArea||pole.area===p.selectedArea)
+    .map(pole=>{
+      const longitude=pole.id===moved?.id?moved.longitude:pole.longitude;
+      const latitude=pole.id===moved?.id?moved.latitude:pole.latitude;
+      const point=m.project([longitude,latitude]);
+      const overlapsRegional=visibleRegionals.some(regional=>{
+        const regionalPoint=m.project([regional.longitude,regional.latitude]);
+        return Math.hypot(point.x-regionalPoint.x,point.y-regionalPoint.y)<=MARKER_OVERLAP_RADIUS_PX;
+      });
+      return{
+        type:'Feature' as const,
+        properties:{
+          id:pole.id,
+          color:markerColor(pole,p.data!.poles),
+          ring:territoryColor(pole,p.data!.poles),
+          active:pole.id===p.selectedPole?1:0,
+          overlapsRegional:overlapsRegional?1:0,
+        },
+        geometry:{type:'Point' as const,coordinates:[longitude,latitude]},
+      };
+    });
+};
+const updatePoleSource=(m:MapboxMap,p:Props,moved?:{id:string;longitude:number;latitude:number})=>{
+  (m.getSource('poles') as GeoJSONSource|undefined)?.setData({type:'FeatureCollection',features:poleFeatures(m,p,moved)});
+};
 const munCode=(value:unknown)=>String(value||'').replace(/\D/g,'').padStart(7,'0').slice(-7);
 const metersPerDeg=(lat:number)=>{
   const cos=Math.cos((lat*Math.PI)/180);
@@ -399,7 +430,11 @@ export default function MapView(p:Props){
       }});
       m.addSource('poles',{type:'geojson',data:emptyPoints()});
       m.addLayer({id:'poles-circle',type:'circle',source:'poles',...(isStandardStyle?{slot:'top' as const}:{}),paint:{
-        'circle-radius':['case',['==',['get','active'],1],9,7],
+        'circle-radius':['case',
+          ['==',['get','overlapsRegional'],1],['case',['==',['get','active'],1],16,14],
+          ['==',['get','active'],1],9,
+          7,
+        ],
         'circle-color':['get','color'],
         'circle-stroke-width':['case',['==',['get','active'],1],3,2],
         'circle-stroke-color':['case',['==',['get','active'],1],['get','ring'],'#09111f'],
@@ -576,17 +611,7 @@ export default function MapView(p:Props){
         const drag=dragPole.current;
         if(!drag)return;
         drag.moved=true;
-        const source=m.getSource('poles') as GeoJSONSource|undefined;
-        const selected=callbacks.current.selectedPole;
-        const selectedArea=callbacks.current.selectedArea;
-        const features=(dataRef.current?.poles||[])
-          .filter(pole=>!selectedArea||pole.area===selectedArea)
-          .map(pole=>({
-            type:'Feature' as const,
-            properties:{id:pole.id,color:markerColor(pole,dataRef.current?.poles||[]),ring:territoryColor(pole,dataRef.current?.poles||[]),active:pole.id===selected?1:0},
-            geometry:{type:'Point' as const,coordinates:pole.id===drag.id?[e.lngLat.lng,e.lngLat.lat]:[pole.longitude,pole.latitude]},
-          }));
-        source?.setData({type:'FeatureCollection',features});
+        updatePoleSource(m,callbacks.current,{id:drag.id,longitude:e.lngLat.lng,latitude:e.lngLat.lat});
       });
       m.on('mouseup',(e:MapMouseEvent)=>{
         const drag=dragPole.current;
@@ -597,18 +622,10 @@ export default function MapView(p:Props){
         if(inBrazil(e.lngLat.lng,e.lngLat.lat))callbacks.current.onMovePole(drag.id,e.lngLat.lng,e.lngLat.lat);
         else{
           const pole=dataRef.current?.poles.find(item=>item.id===drag.id);
-          if(pole)(m.getSource('poles') as GeoJSONSource|undefined)?.setData({
-            type:'FeatureCollection',
-            features:(dataRef.current?.poles||[])
-              .filter(item=>!callbacks.current.selectedArea||item.area===callbacks.current.selectedArea)
-              .map(item=>({
-                type:'Feature' as const,
-                properties:{id:item.id,color:markerColor(item,dataRef.current?.poles||[]),ring:territoryColor(item,dataRef.current?.poles||[]),active:item.id===callbacks.current.selectedPole?1:0},
-                geometry:{type:'Point' as const,coordinates:[item.longitude,item.latitude]},
-              })),
-          });
+          if(pole)updatePoleSource(m,callbacks.current);
         }
       });
+      m.on('moveend',()=>updatePoleSource(m,callbacks.current));
       for(const layer of ['district-fill','territory-fill','portfolio-fill','municipality-fill','poles-circle','regionals-circle']){
         m.on('mouseenter',layer,()=>{m.getCanvas().style.cursor=callbacks.current.editable&&layer==='poles-circle'?'grab':'pointer';});
         m.on('mouseleave',layer,()=>{if(!dragPole.current)m.getCanvas().style.cursor='';});
@@ -695,14 +712,7 @@ export default function MapView(p:Props){
   useEffect(()=>{
     const m=map.current;
     if(!m||!styleReady||!p.data)return;
-    const poleFeatures=p.data.poles
-      .filter(pole=>!p.selectedArea||pole.area===p.selectedArea)
-      .map(pole=>({
-        type:'Feature' as const,
-        properties:{id:pole.id,color:colorForMarker(pole),ring:colorForTerritory(pole),active:pole.id===p.selectedPole?1:0},
-        geometry:{type:'Point' as const,coordinates:[pole.longitude,pole.latitude]},
-      }));
-    (m.getSource('poles') as GeoJSONSource|undefined)?.setData({type:'FeatureCollection',features:poleFeatures});
+    updatePoleSource(m,p);
 
     const poleById=new Map(p.data.poles.map(pole=>[pole.id,pole]));
     const colorByPoleId=new Map(p.data.poles.map(pole=>[pole.id,colorForTerritory(pole)]));
@@ -927,7 +937,7 @@ export default function MapView(p:Props){
         '#fbbf24',
       ] as any);
     }
-  },[p.data,p.selectedPole,p.selectedUnits,p.selectedArea,p.showAll,p.showPopulation,p.population,p.showExcluded,p.excludedCodes,p.editable,styleReady,poles,meshEpoch,showDistrictMesh,showMesh]);
+  },[p.data,p.selectedPole,p.selectedUnits,p.selectedArea,p.showAll,p.showPopulation,p.population,p.showExcluded,p.excludedCodes,p.showRegionals,p.regionals,p.showPoles,p.editable,styleReady,poles,meshEpoch,showDistrictMesh,showMesh]);
 
   useEffect(()=>{
     const m=map.current;
