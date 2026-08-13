@@ -136,8 +136,8 @@ Propriedades:
 - nenhuma área, dispersão ou constante fixa será somada à carga;
 - área e dispersão permanecem indicadores de qualidade.
 
-Valor inicial recomendado para avaliação: `ENFASE_LOJAS = 0,25`. Esse valor ainda
-precisa de validação de negócio; não é uma restrição estrutural.
+O valor inicial fica definido como `ENFASE_LOJAS = 0,25`. A população permanece
+dominante e as lojas produzem somente um reforço moderado.
 
 ## 5. Unidade de demanda
 
@@ -199,6 +199,85 @@ custo_populacional = relevancia_u * distancia_unidade_polo
 
 A distância não possui teto; ela apenas diferencia soluções melhores e piores.
 
+### 7.1 Baseline municipal atual: distância X
+
+A comparação com a estrutura atual será feita pelas unidades territoriais atendidas,
+e não pelas lojas individualmente:
+
+- município abaixo de 300 mil habitantes será uma observação municipal;
+- município a partir de 300 mil habitantes será comparado por distrito;
+- cada unidade aparecerá uma única vez no baseline;
+- o ponto da unidade será seu centro territorial representativo;
+- a distância será geográfica Haversine, em quilômetros.
+
+Para identificar o polo atual de referência de cada unidade:
+
+```text
+agrupar as lojas da unidade por supervisor atual
+escolher o supervisor com a maior quantidade de lojas
+
+em caso de empate:
+    escolher o supervisor cujo polo atual esteja mais próximo da unidade
+    persistindo o empate, escolher o menor identificador estável de supervisor
+
+se a unidade não tiver loja ou supervisor atual válido:
+    escolher o polo atual geograficamente mais próximo
+    registrar METODO_BASELINE = FALLBACK_POLO_ATUAL_MAIS_PROXIMO
+
+DISTANCIA_ATUAL_X_KM = haversine(centro_unidade, polo_atual_referencia)
+```
+
+As lojas determinam somente a dominância observada da carteira atual. A quantidade
+de lojas não será a população de observações da métrica de distância e não duplicará
+municípios atendidos por mais de um supervisor.
+
+O baseline usará o mesmo universo territorial obrigatório do cenário proposto. Nas
+metrópoles, as lojas serão associadas espacialmente aos distritos antes de identificar
+o supervisor dominante. Unidade sem centro territorial válido continuará sendo erro
+de dados do modelo; ausência de vínculo atual válido acionará o fallback descrito.
+
+### 7.2 Distância proposta Y e redução
+
+Depois de formar as novas carteiras:
+
+```text
+DISTANCIA_PROPOSTA_Y_KM = haversine(centro_unidade, novo_polo)
+REDUCAO_DISTANCIA_KM = DISTANCIA_ATUAL_X_KM - DISTANCIA_PROPOSTA_Y_KM
+```
+
+- redução positiva significa melhoria;
+- zero significa manutenção;
+- redução negativa significa aumento da distância;
+- para cada nova carteira, X e Y serão agregados sobre exatamente as mesmas
+  unidades territoriais atribuídas a ela no cenário proposto;
+- não haverá pareamento artificial entre polos atuais e propostos.
+
+Cada registro territorial do comparativo deverá expor:
+
+- `DEMAND_ID` e tipo da unidade;
+- `SUPERVISOR_ATUAL_DOMINANTE`;
+- `POLO_ATUAL_REFERENCIA_ID`;
+- `METODO_BASELINE` com `SUPERVISOR_DOMINANTE`,
+  `DESEMPATE_MENOR_DISTANCIA`, `DESEMPATE_ID_ESTAVEL` ou
+  `FALLBACK_POLO_ATUAL_MAIS_PROXIMO`;
+- `DISTANCIA_ATUAL_X_KM`;
+- `DISTANCIA_PROPOSTA_Y_KM`;
+- `REDUCAO_DISTANCIA_KM`;
+- `PERC_REDUCAO_DISTANCIA`, nulo quando X for zero;
+- `STATUS_DISTANCIA` com `MELHOROU`, `MANTEVE` ou `PIOROU`.
+
+### 7.3 Métrica oficial de raio
+
+O raio oficial será o P90 das distâncias das unidades, ponderado pela população:
+
+```text
+RAIO_P90 = percentil_ponderado(distancia_unidade_polo, populacao_unidade, 0,90)
+```
+
+A distância máxima será mantida como indicador auditável e critério de desempate,
+mas um município extremo não definirá sozinho a função principal. Não será criado
+limite máximo obrigatório de quilômetros.
+
 ## 8. Construção das carteiras
 
 ### 8.1 Voronoi no grafo territorial
@@ -257,14 +336,23 @@ Depois de obter um cenário completo:
 
 - trocar sedes dentro das próprias carteiras;
 - mover unidades de fronteira quando preservar contiguidade;
-- reduzir distância ponderada pela população;
+- reduzir o custo de distância ponderado pela relevância territorial;
+- reduzir o P90 nacional ponderado pela população;
+- reduzir a distância média ponderada pela população;
+- usar a distância máxima como desempate;
 - melhorar representação de regiões com lojas;
 - reduzir cruzamentos de UF desnecessários;
 - melhorar vínculo das GRs;
 - nunca exigir igualdade perfeita entre carteiras.
 
 Cada movimento só substitui o resultado anterior quando mantém as regras
-obrigatórias.
+obrigatórias e não aumenta o custo de distância ponderado pela relevância. Entre
+movimentos admissíveis, será escolhido primeiro o que mais reduzir o P90 populacional,
+depois a média populacional e, por último, a distância máxima.
+
+A melhoria será avaliada nacionalmente. Uma carteira individual poderá aumentar sua
+distância quando o conjunto nacional melhorar; não haverá obrigação de redução para
+cada carteira.
 
 ## 11. Saída e status
 
@@ -287,7 +375,9 @@ O cenário recebe `CALCULADO_COM_RESSALVAS` quando existe, por exemplo:
 - loja sem atendimento;
 - GR vinculada a polo muito distante;
 - dado cadastral incompleto;
-- concentração elevada de população em uma carteira.
+- concentração elevada de população em uma carteira;
+- P90 nacional proposto igual ou superior ao baseline atual, identificado por
+  `SEM_REDUCAO_RAIO_P90`.
 
 Essas condições aparecem no relatório, mas não apagam o resultado.
 
@@ -302,9 +392,20 @@ e não `CALCULADO_COM_RESSALVAS`.
 - lojas atendidas e não atendidas;
 - municípios e distritos atendidos;
 - municípios não atendidos por motivo;
-- distância média, P90 e máxima;
-- distância ponderada pela população;
-- distância ponderada pelas lojas;
+- distância atual X e proposta Y de cada município ou distrito;
+- redução absoluta e percentual de distância por unidade;
+- P90 atual e proposto, ponderados pela população;
+- distância média atual e proposta, ponderadas pela população;
+- distância máxima atual e proposta;
+- redução absoluta e percentual do P90, da média e da máxima;
+- quantidade e população das unidades que melhoraram, mantiveram ou pioraram;
+- método de identificação do polo atual de cada unidade;
+- métricas X e Y nacionais e por nova carteira, calculadas sobre as mesmas unidades;
+- `RAIO_P90_ATUAL_X_KM`, `RAIO_P90_PROPOSTO_Y_KM` e
+  `REDUCAO_RAIO_P90_KM`;
+- `DISTANCIA_MEDIA_ATUAL_X_KM`, `DISTANCIA_MEDIA_PROPOSTA_Y_KM` e redução;
+- `DISTANCIA_MAX_ATUAL_X_KM`, `DISTANCIA_MAX_PROPOSTA_Y_KM` e redução;
+- percentual de unidades e de população cobertas pelo baseline comparativo;
 - população mínima, média e máxima por carteira;
 - lojas mínimas, médias e máximas por carteira;
 - quantidade de unidades por carteira;
@@ -312,7 +413,7 @@ e não `CALCULADO_COM_RESSALVAS`.
 - quantidade de GRs vinculadas por polo;
 - distância de cada GR ao polo vinculado;
 - polos e carteiras nas metrópoles distritalizadas;
-- diferenças em relação à estrutura atual, somente para transição.
+- diferenças em relação à estrutura atual para transição e para o comparativo X/Y.
 
 Nenhum indicador isolado, exceto uma regra obrigatória, transforma o cenário em
 erro de execução.
@@ -329,11 +430,12 @@ erro de execução.
 - Não exigir prova de ótimo global.
 - Não executar um solver longo sem cenário inicial recuperável.
 
-## 14. Único parâmetro de negócio ainda pendente
+## 14. Parâmetros de negócio consolidados
 
-Definir `ENFASE_LOJAS`, entre 0 e 1. A recomendação inicial é 0,25:
-
-- `0`: somente população influencia a relevância;
-- `0,25`: população principal com reforço moderado das lojas;
-- `0,50`: lojas possuem influência secundária forte;
-- `1`: participação populacional e participação de lojas têm o mesmo peso.
+- `ENFASE_LOJAS = 0,25`;
+- distância geográfica Haversine;
+- raio oficial igual ao P90 ponderado pela população;
+- distância máxima apenas como auditoria e desempate;
+- melhoria nacional, sem trava individual por carteira;
+- baseline municipal pelo supervisor dominante em quantidade de lojas;
+- comparação por distrito nas cidades a partir de 300 mil habitantes.

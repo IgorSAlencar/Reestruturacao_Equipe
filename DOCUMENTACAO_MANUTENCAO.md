@@ -11,7 +11,7 @@ Aplicação local de planejamento de cobertura de **polos** (supervisões) e sua
 Permite:
 
 1. Explorar a **visão Atual** (lojas ativas no período SQL).
-2. Comparar cenários **GreenField V3/V4** gerados fora do app.
+2. Comparar cenários **GreenField V3/V4/V5** gerados fora do app.
 3. Abrir qualquer cenário no **Builder**, editar carteiras, salvar rascunhos e exportar JSON/GeoJSON.
 
 Stack: React + Mapbox GL (frontend), Express + `mssql` + SQLite (API), GeoJSON local (malhas).
@@ -29,7 +29,7 @@ Stack: React + Mapbox GL (frontend), Express + `mssql` + SQLite (API), GeoJSON l
 | `geometria_brasil/` | Malha municipal e distrital (GeoJSON) |
 | `public/brazil-mask.json` | Máscara do Brasil (esconde o resto do mundo no mapa) |
 | `.territorios-data/` | Cache local (Atual, população, regionais, centros, SQLite) |
-| `saida_greenfield_v3/` / `saida_greenfield_v4/` | Pastas de cenários solver (descobertas automaticamente) |
+| `saida_greenfield_v3/`, `saida_greenfield_v4/`, `saida_greenfield_v5/` | Pastas de cenários descobertas automaticamente |
 | `scripts/` | Geradores de máscara e malha distrital |
 
 Fluxo resumido:
@@ -182,11 +182,12 @@ Escrita atômica: grava `.tmp` e renomeia.
 
 ---
 
-## 4. Cenários GreenField (V3 / V4)
+## 4. Cenários GreenField (V3 / V4 / V5)
 
 Descoberta automática em `api/scenarios.js`:
 
-- Pastas: `OUTPUT_DIR` / `OUTPUT_DIR_V4` (padrão `saida_greenfield_v3`, `saida_greenfield_v4`).
+- Pastas: `OUTPUT_DIR`, `OUTPUT_DIR_V4` e `OUTPUT_DIR_V5`.
+- Padrões: `saida_greenfield_v3`, `saida_greenfield_v4` e `saida_greenfield_v5`.
 - Cenário válido = subpasta com:
   - `resultado_*.xlsx`
   - `carteiras_unidades.geojson`
@@ -202,6 +203,21 @@ Diferença conceitual vs Atual:
 | Geometria territorial | malha municipal sob demanda | `carteiras_unidades.geojson` |
 | Distância | 0 no cache | vem de `DISTANCIA_KM` no GeoJSON |
 | Tipos de unidade | só `MUNICIPIO` | `MUNICIPIO` e `DISTRITO` |
+
+### 4.1 Contrato específico da V5
+
+- Executável: `Estudo_GreenField_V5.py`.
+- A execução cria `saida_greenfield_v5/V5_135_<RUN_ID>/`.
+- A pasta final contém `resultado_V5_135_<RUN_ID>.xlsx` e
+  `carteiras_unidades.geojson`, portanto é descoberta sem cópia manual.
+- `MODELO_VERSAO` contém `V5` e a API devolve `kind: "v5"`.
+- O Excel expõe as abas mínimas `cenario` e `gerencias_propostas`.
+- Cada polo possui `GERENCIA_ID`, nome municipal, coordenadas, área e UF.
+- Cada feature territorial possui `DEMAND_ID`, `GERENCIA_ID`, `TIPO_UNIDADE`,
+  código/nome municipal, UF, população, lojas e `DISTANCIA_KM`.
+- Municípios acima de 300 mil habitantes aparecem como distritos e incluem
+  `CD_DIST`.
+- A API usa o GeoJSON da V5 diretamente; o Builder preserva essas geometrias.
 
 ---
 
@@ -332,7 +348,7 @@ Helpers úteis na manutenção:
 |---|---|---|
 | GET | `/api/health` | Ping |
 | GET | `/api/config` | Token/estilo Mapbox |
-| GET | `/api/scenarios` | Atual (se cache) + V3/V4 |
+| GET | `/api/scenarios` | Atual (se cache) + V3/V4/V5 |
 | GET | `/api/scenarios/current` | Cache Atual |
 | GET | `/api/scenarios/:id` | Cenário GreenField |
 | POST | `/api/current-cache/refresh` | Dispara refresh (202) |
@@ -355,7 +371,7 @@ Ver `.env.example`. Principais:
 |---|---|
 | `APP_HOST` / `WEB_PORT` / `API_HOST` / `API_PORT` | Bind da app |
 | `APP_DATA_DIR` | Cache (padrão `.territorios-data`) |
-| `OUTPUT_DIR` / `OUTPUT_DIR_V4` | Pastas GreenField |
+| `OUTPUT_DIR` / `OUTPUT_DIR_V4` / `OUTPUT_DIR_V5` | Pastas GreenField |
 | `ARQUIVO_MUNICIPIOS_JSON` / `ARQUIVO_DISTRITOS_JSON` | Override das malhas |
 | `MAPBOX_ACCESS_TOKEN` / `MAPBOX_STYLE` | Mapa |
 | `SQL_*` | Conexão SQL Server (`mssql`) |

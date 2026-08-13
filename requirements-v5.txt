@@ -1,0 +1,11 @@
+pandas
+numpy
+geopandas
+shapely
+sqlalchemy
+pyodbc
+scipy
+scikit-learn
+openpyxl
+pyogrio
+python-dotenv

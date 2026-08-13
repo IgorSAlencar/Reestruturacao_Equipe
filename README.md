@@ -1,6 +1,6 @@
 # Territórios BE
 
-Aplicação local para explorar polos atuais, comparar cenários GreenField V3/V4 e construir simulações manuais de carteira.
+Aplicação local para explorar polos atuais, comparar cenários GreenField V3/V4/V5 e construir simulações manuais de carteira.
 
 ## Início rápido
 
@@ -23,7 +23,29 @@ Os endereços são controlados por `APP_HOST`, `WEB_PORT`, `API_HOST` e
 `API_PORT`. Os padrões estão preparados para a máquina corporativa
 (`10.206.168.97`, portas `5173` e `333`).
 
-A API descobre automaticamente cenários completos nas pastas `saida_greenfield_v3` e `saida_greenfield_v4`. A visão **Atual** é criada pelo botão **Atualizar lojas**, que executa a consulta SQL existente e grava um cache local em `.territorios-data`.
+A API descobre automaticamente cenários completos nas pastas `saida_greenfield_v3`, `saida_greenfield_v4` e `saida_greenfield_v5`. A visão **Atual** é criada pelo botão **Atualizar lojas**, que executa a consulta SQL existente e grava um cache local em `.territorios-data`.
+
+## GreenField V5
+
+A V5 usa uma heurística populacional contígua e não depende do SCIP. Para preparar
+o ambiente e executar:
+
+```powershell
+python -m pip install -r requirements-v5.txt
+python Estudo_GreenField_V5.py
+```
+
+Parâmetros úteis:
+
+```powershell
+python Estudo_GreenField_V5.py --periodo 202607 --sem-sql
+python Estudo_GreenField_V5.py --output-dir saida_greenfield_v5
+```
+
+A tabela SQL de municípios excluídos deve estar configurada em
+`EXCLUDED_MUNICIPALITIES_TABLE`. A saída padrão é criada em
+`saida_greenfield_v5/V5_135_<RUN_ID>` e passa a ser descoberta automaticamente
+pelo mapa quando contém o Excel final e `carteiras_unidades.geojson`.
 
 A conexão SQL da visão **Atual** usa diretamente o pacote Node `mssql`, com as
 variáveis `SQL_SERVER`, `SQL_DATABASE`, `SQL_USER`, `SQL_PASSWORD`, `SQL_DOMAIN`

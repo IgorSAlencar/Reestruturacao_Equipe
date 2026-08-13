@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { DATA_DIR, ROOT, V3_DIR, V4_DIR } from './config.js';
+import { DATA_DIR, ROOT, V3_DIR, V4_DIR, V5_DIR } from './config.js';
 
 const value=(r,...keys)=>keys.map(k=>r[k]).find(v=>v!==undefined&&v!==null&&v!=='');
 const num=v=>Number.isFinite(Number(v))?Number(v):0;
@@ -18,9 +18,9 @@ function folders(root){if(!fs.existsSync(root))return[];return fs.readdirSync(ro
 const workbookCache=new Map();
 function readWorkbook(file){const mtime=fs.statSync(file).mtimeMs,cached=workbookCache.get(file);if(cached?.mtime===mtime)return cached.data;const output=execFileSync(process.env.PYTHON_BIN||'python',[path.join(ROOT,'utils','read_scenario_workbook.py'),file],{cwd:ROOT,encoding:'utf8',maxBuffer:20*1024*1024});const data=JSON.parse(output);workbookCache.set(file,{mtime,data});return data;}
 const sheet=(book,name)=>book[name]||[];
-function detectKind(folder,book){const version=text(sheet(book,'cenario')[0]?.MODELO_VERSAO).toUpperCase();return version.includes('V4')||folder.toLowerCase().includes('v4')?'v4':'v3';}
+function detectKind(folder,book){const version=text(sheet(book,'cenario')[0]?.MODELO_VERSAO).toUpperCase(),name=folder.toLowerCase();if(version.includes('V5')||name.includes('v5'))return'v5';if(version.includes('V4')||name.includes('v4'))return'v4';return'v3';}
 async function summaryFrom(folder){const wb=findWorkbook(folder),book=readWorkbook(path.join(folder,wb)),managers=sheet(book,'gerencias_propostas'),kind=detectKind(folder,book),areas={};managers.forEach(r=>{const a=text(value(r,'DESC_GERENCIA_AREA_PROPOSTA'),'SEM ÁREA');areas[a]=(areas[a]||0)+1;});const scenario=sheet(book,'cenario')[0]||{};return{id:path.basename(folder),name:path.basename(folder),kind,version:text(value(scenario,'MODELO_VERSAO'),kind.toUpperCase()),createdAt:text(value(scenario,'DATA_EXECUCAO')),path:folder,poleCount:managers.length,areaCounts:areas,warnings:[]};}
-export async function listScenarios(){const scenarios=await Promise.all([...folders(V4_DIR),...folders(V3_DIR)].map(summaryFrom));return scenarios.sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));}
+export async function listScenarios(){const scenarios=await Promise.all([...folders(V5_DIR),...folders(V4_DIR),...folders(V3_DIR)].map(summaryFrom));return scenarios.sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));}
 export async function loadScenario(id){
   const summary=(await listScenarios()).find(s=>s.id===id);if(!summary?.path)return null;const book=readWorkbook(path.join(summary.path,findWorkbook(summary.path))),managers=sheet(book,'gerencias_propostas');
   const poles=managers.map(r=>({id:text(value(r,'GERENCIA_ID')),name:text(value(r,'NM_MUN_POLO','NM_DIST_POLO','GERENCIA_ID')),longitude:num(value(r,'LONGITUDE')),latitude:num(value(r,'LATITUDE')),area:text(value(r,'DESC_GERENCIA_AREA_PROPOSTA'),'SEM ÁREA'),regional:text(value(r,'GER_REGIONAL')),uf:text(value(r,'UF_POLO')),municipalityCode:normalizeMunicipalityCode(value(r,'COD_IBGE_POLO')),municipalityName:text(value(r,'NM_MUN_POLO')),source:summary.kind})).filter(p=>p.id&&p.latitude&&p.longitude);

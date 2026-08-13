@@ -33,3 +33,8 @@ dist/
 dist-api/
 .territorios-data/
 *.tsbuildinfo
+
+# Resultados gerados pelos modelos
+saida_greenfield_v3/
+saida_greenfield_v4/
+saida_greenfield_v5/
