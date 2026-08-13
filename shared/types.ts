@@ -6,5 +6,5 @@ export interface Pole { id: string; name: string; longitude: number; latitude: n
 export interface TerritoryUnit { id: string; type: 'MUNICIPIO'|'DISTRITO'; municipalityCode: string; districtCode?: string; municipalityName?: string; uf?: string; poleId: string|null; population: number; stores: number; latitude: number; longitude: number; distanceKm: number; }
 export interface ScenarioData { summary: ScenarioSummary; poles: Pole[]; units: TerritoryUnit[]; territories: FeatureCollection<Geometry>; refreshedAt?: string; }
 export interface DraftData { id: string; name: string; baseScenarioId: string; revision: number; createdAt: string; updatedAt: string; data: ScenarioData; }
-export interface PoleMetrics { municipalities: number; units: number; stores: number; population: number; minKm: number; meanKm: number; maxKm: number; }
+export interface PoleMetrics { municipalities: number; units: number; districts: number; stores: number; population: number; minKm: number; meanKm: number; maxKm: number; }
 export interface RegionalOffice { id: string; name: string; longitude: number; latitude: number; address: string; agencies: number; }

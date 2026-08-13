@@ -13,14 +13,17 @@ export function getSqlConfig(env = process.env) {
     throw new Error('Defina SQL_USER e SQL_PASSWORD no arquivo .env.');
   }
 
+  const domain = env.SQL_DOMAIN || '';
+  const instanceName = env.SQL_INSTANCE || '';
+
   return {
     server: env.SQL_SERVER || 'MZ-VV-BD-182',
     database: env.SQL_DATABASE || 'TESTE',
     user,
     password,
-    domain: env.SQL_DOMAIN || 'CORP',
+    ...(domain ? { domain } : {}),
     options: {
-      instanceName: env.SQL_INSTANCE || 'MSSQL2008A',
+      ...(instanceName ? { instanceName } : {}),
       trustedConnection: asBoolean(env.SQL_TRUSTED_CONNECTION, true),
       encrypt: asBoolean(env.SQL_ENCRYPT, false),
       trustServerCertificate: asBoolean(env.SQL_TRUST_SERVER_CERTIFICATE, true),

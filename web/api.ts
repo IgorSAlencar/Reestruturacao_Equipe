@@ -2,6 +2,7 @@ import type { DraftData, RegionalOffice, ScenarioData, ScenarioSummary } from '.
 
 export type PopulationResponse={source:string;censusYear:number|null;count:number;values:Record<string,number>;cachedAt:string;stale:boolean};
 export type RegionalOfficesResponse={source:string;count:number;points:RegionalOffice[];cachedAt:string;stale:boolean};
+export type ExcludedMunicipalitiesResponse={source:string;column:string;count:number;codes:string[];cachedAt:string;stale:boolean};
 
 async function request<T>(url:string,init?:RequestInit):Promise<T>{
   const r=await fetch(url,{...init,headers:{'content-type':'application/json',...(init?.headers||{})}});
@@ -20,4 +21,6 @@ export const api={
   cacheStatus:()=>request<{available:boolean;refreshing:boolean;lastError:string|null}>('/api/current-cache/status'),
   population:()=>request<PopulationResponse>('/api/population'),
   regionalOffices:()=>request<RegionalOfficesResponse>('/api/regional-offices'),
+  excludedMunicipalities:()=>request<ExcludedMunicipalitiesResponse>('/api/excluded-municipalities'),
+  municipalityCenters:()=>request<{count:number;source:string;places:Array<{code:string;name:string;latitude:number;longitude:number}>}>('/api/geometry/municipality-centers'),
 };

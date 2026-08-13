@@ -1,7 +1,27 @@
+/** Cores sólidas por DESC_GERENCIA_AREA (markers e legenda). */
 const AREA_COLORS=[
   '#39d98a','#58a6ff','#ffb454','#c792ea','#ff6b81','#4fd1c5','#f6e05e','#7f9cf5',
   '#ed64a6','#68d391','#f687b3','#63b3ed','#fbd38d','#9f7aea','#38b2ac','#fc8181',
 ];
+
+/**
+ * Paleta para pintar a região de atuação de cada polo.
+ * Cores bem distintas para diferenciar carteiras vizinhas quando várias estão visíveis.
+ */
+const TERRITORY_COLORS=[
+  '#e6194b','#3cb44b','#4363d8','#f58231','#911eb4','#42d4f4','#f032e6','#bfef45',
+  '#fabed4','#469990','#dcbeff','#9a6324','#fffac8','#800000','#aaffc3','#808000',
+  '#ffd8b1','#000075','#a9a9a9','#ffe119','#e6beff','#1abc9c','#e74c3c','#3498db',
+  '#f39c12','#9b59b6','#2ecc71','#e67e22','#1abc9c','#c0392b','#2980b9','#8e44ad',
+];
+
+/** Destaque de municípios pré-selecionados no Builder (antes de Atribuir). */
+export const PENDING_ASSIGN_COLOR='#f59e0b';
+export const PENDING_ASSIGN_STROKE='#b45309';
+
+/** Municípios da tabela EXCLUDED_MUNICIPALITIES_* (overlay no mapa). */
+export const EXCLUDED_MUNICIPALITY_COLOR='#3b2414';
+export const EXCLUDED_MUNICIPALITY_STROKE='#1f120a';
 
 type ColoredPole={id:string;area:string};
 
@@ -12,39 +32,47 @@ export function areaColor(area:string,areas:string[]=[]){
   return AREA_COLORS[Math.abs([...area].reduce((n,c)=>(n*31+c.charCodeAt(0))|0,0))%AREA_COLORS.length];
 }
 
-export function poleColor(pole:ColoredPole,poles:ColoredPole[]){
+/** Cor do marker: uma cor sólida por gerência de área. */
+export function markerColor(pole:ColoredPole,poles:ColoredPole[]){
   const areas=[...new Set(poles.map(item=>item.area))];
-  const base=areaColor(pole.area,areas);
-  const siblings=poles.filter(item=>item.area===pole.area).sort((a,b)=>a.id.localeCompare(b.id));
-  const index=Math.max(0,siblings.findIndex(item=>item.id===pole.id));
-  if(index===0)return base;
-  const hsl=rgbToHsl(hexToRgb(base));
-  const hue=(hsl.h+(index*11)%37-18+360)%360;
-  const saturation=Math.max(48,Math.min(88,hsl.s+(index*7)%21-10));
-  const lightness=Math.max(32,Math.min(72,hsl.l+(index*13)%31-15));
-  return `hsl(${Math.round(hue)}, ${Math.round(saturation)}%, ${Math.round(lightness)}%)`;
+  return areaColor(pole.area,areas);
+}
+
+/**
+ * Cor da região de atuação do polo (carteira).
+ * Cada polo recebe uma cor distinta da paleta, independente da gerência de área.
+ */
+export function territoryColor(pole:ColoredPole,poles:ColoredPole[]){
+  const ordered=[...poles].sort((a,b)=>a.id.localeCompare(b.id));
+  const index=Math.max(0,ordered.findIndex(item=>item.id===pole.id));
+  if(index<TERRITORY_COLORS.length)return TERRITORY_COLORS[index];
+  // Além da paleta: espalha no círculo de matiz (ângulo áureo) para manter distinção.
+  const hue=Math.round((index*137.508)%360);
+  const saturation=58+(index%4)*8;
+  const lightness=42+(index%5)*5;
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+}
+
+/** Escurece uma cor hex/hsl para contorno estilo costura. */
+export function shadeColor(color:string,factor=0.62){
+  const hsl=color.trim().match(/^hsl\(\s*([\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%\s*\)$/i);
+  if(hsl){
+    const lightness=Math.max(12,Math.min(92,Number(hsl[3])*factor));
+    return `hsl(${hsl[1]}, ${hsl[2]}%, ${Math.round(lightness)}%)`;
+  }
+  const hex=color.trim().replace('#','');
+  if(!/^[0-9a-f]{6}$/i.test(hex))return color;
+  const value=parseInt(hex,16);
+  const channel=(shift:number)=>Math.max(0,Math.min(255,Math.round(((value>>shift)&255)*factor)));
+  const r=channel(16),g=channel(8),b=channel(0);
+  return `#${[r,g,b].map(n=>n.toString(16).padStart(2,'0')).join('')}`;
+}
+
+/** @deprecated Use markerColor ou territoryColor conforme o contexto. */
+export function poleColor(pole:ColoredPole,poles:ColoredPole[]){
+  return territoryColor(pole,poles);
 }
 
 export function areaGradient(area:string,poles:ColoredPole[]){
-  const colors=poles.filter(pole=>pole.area===area).sort((a,b)=>a.id.localeCompare(b.id)).map(pole=>poleColor(pole,poles));
-  return colors.length>1?`linear-gradient(135deg,${colors.join(',')})`:(colors[0]||areaColor(area));
-}
-
-function hexToRgb(hex:string){
-  const value=parseInt(hex.slice(1),16);
-  return {r:value>>16,g:(value>>8)&255,b:value&255};
-}
-
-function rgbToHsl({r,g,b}:{r:number;g:number;b:number}){
-  const red=r/255,green=g/255,blue=b/255;
-  const max=Math.max(red,green,blue),min=Math.min(red,green,blue),delta=max-min;
-  let h=0;
-  if(delta){
-    if(max===red)h=60*(((green-blue)/delta)%6);
-    else if(max===green)h=60*((blue-red)/delta+2);
-    else h=60*((red-green)/delta+4);
-  }
-  const l=(max+min)/2;
-  const s=delta===0?0:delta/(1-Math.abs(2*l-1));
-  return {h:(h+360)%360,s:s*100,l:l*100};
+  return areaColor(area,[...new Set(poles.map(pole=>pole.area))]);
 }

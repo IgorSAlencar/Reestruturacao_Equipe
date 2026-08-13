@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DATA_DIR, MUNICIPALITIES_FILE, ROOT } from './config.js';
+import { writeMunicipalityCentersFromSql } from './municipalityCenters.js';
 import { getSqlPool, sql } from './sqlServer.js';
 
 const UF_BY_PREFIX = {
@@ -19,6 +20,23 @@ const number = (value) => {
 const validCoordinates = (latitude, longitude) => latitude >= -35.5 && latitude <= 6.5 && longitude >= -75.5 && longitude <= -32;
 const populationCacheFile = path.join(DATA_DIR, 'population.json');
 const regionalCacheFile = path.join(DATA_DIR, 'regional-offices.json');
+const excludedCacheFile = path.join(DATA_DIR, 'excluded-municipalities.json');
+
+function sqlIdentifier(value, label) {
+  const textValue = String(value ?? '').trim();
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(textValue)) {
+    throw new Error(`${label} SQL inválido: ${textValue || '(vazio)'}`);
+  }
+  return `[${textValue}]`;
+}
+
+function qualifiedSqlTable(value) {
+  const parts = String(value ?? '').split('.').map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 1 || parts.length > 3) {
+    throw new Error('EXCLUDED_MUNICIPALITIES_TABLE deve ser tabela, schema.tabela ou banco.schema.tabela.');
+  }
+  return parts.map((part) => sqlIdentifier(part, 'Identificador de tabela')).join('.');
+}
 
 function normalizeMunicipalityCode(value, validCodes, sixDigitCodes) {
   const code = digits(value);
@@ -40,17 +58,14 @@ async function query(connection, filename, configure) {
 
 function populationPayload(rows, stale = false) {
   const values = {};
-  let censusYear = null;
   for (const row of rows) {
     const code = digits(row.COD_UN_REG).padStart(7, '0').slice(0, 7);
     const value = number(row.POPULACAO);
-    const year = number(row.DATA_CENSO);
     if (code && value !== null) values[code] = Math.max(0, Math.round(value));
-    if (year !== null) censusYear = Math.max(censusYear || 0, year);
   }
   return {
     source: 'IBGE.dbo.IBGE_POP',
-    censusYear,
+    censusYear: null,
     count: Object.keys(values).length,
     values,
     cachedAt: new Date().toISOString(),
@@ -119,6 +134,48 @@ export async function loadRegionalOffices() {
   } catch (error) {
     try {
       const cached = JSON.parse(await fs.readFile(regionalCacheFile, 'utf8'));
+      return { ...cached, stale: true };
+    } catch {
+      throw error;
+    }
+  }
+}
+
+function excludedPayload(rows, meta = {}, stale = false) {
+  const codes = new Set();
+  for (const row of rows) {
+    const raw = row.CD_MUNIC ?? row.cd_munic ?? Object.values(row)[0];
+    const code = digits(raw).padStart(7, '0').slice(0, 7);
+    if (code && code !== '0000000') codes.add(code);
+  }
+  return {
+    source: meta.source || 'EXCLUDED_MUNICIPALITIES_TABLE',
+    column: meta.column || 'CD_MUNIC',
+    count: codes.size,
+    codes: [...codes].sort(),
+    cachedAt: new Date().toISOString(),
+    stale,
+  };
+}
+
+export async function loadExcludedMunicipalities() {
+  const tableEnv = process.env.EXCLUDED_MUNICIPALITIES_TABLE || '';
+  const columnEnv = process.env.EXCLUDED_MUNICIPALITIES_COLUMN || 'CD_MUNIC';
+  if (!tableEnv.trim()) {
+    throw new Error('Defina EXCLUDED_MUNICIPALITIES_TABLE no arquivo .env.');
+  }
+
+  try {
+    const table = qualifiedSqlTable(tableEnv);
+    const column = sqlIdentifier(columnEnv, 'Coluna de exclusão');
+    const connection = await getSqlPool();
+    const result = await connection.request().query(`SELECT DISTINCT ${column} AS CD_MUNIC FROM ${table} WHERE ${column} IS NOT NULL`);
+    const payload = excludedPayload(result.recordset, { source: tableEnv.trim(), column: columnEnv.trim() });
+    await writeJsonCache(excludedCacheFile, payload);
+    return payload;
+  } catch (error) {
+    try {
+      const cached = JSON.parse(await fs.readFile(excludedCacheFile, 'utf8'));
       return { ...cached, stale: true };
     } catch {
       throw error;
@@ -232,6 +289,14 @@ export async function refreshCurrentCache() {
 
   await fs.mkdir(DATA_DIR, { recursive: true });
   await writePopulationCache(populationPayload(population));
+  writeMunicipalityCentersFromSql(
+    [...coordinates].map(([code, location]) => ({
+      code,
+      name: names.get(code) || code,
+      latitude: location.latitude,
+      longitude: location.longitude,
+    })),
+  );
   const temporaryFile = path.join(DATA_DIR, 'current.json.tmp');
   await fs.writeFile(temporaryFile, JSON.stringify(payload), 'utf8');
   await fs.rename(temporaryFile, path.join(DATA_DIR, 'current.json'));

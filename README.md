@@ -11,7 +11,11 @@ corporativa (Node 22.11.0 / npm 10.9.0) é suportada.
 2. Instale exatamente as dependências validadas com `npm ci`.
 3. Em um terminal execute `npm run dev:api`. O script habilita automaticamente
    o SQLite experimental exigido pelo Node 22.11.0.
-4. Em outro terminal execute `npm run dev`.
+   Esse comando mantém a API ativa sem reinícios automáticos. Para desenvolver
+   o backend com recarga ao editar seus arquivos, use `npm run dev:api:watch`.
+4. Em outro terminal execute `npm run dev`. Esse comando compila e serve uma
+   versão estável, sem o cliente HMR que recarrega a tela dos usuários. Para
+   desenvolver o frontend com recarga automática, use `npm run dev:web:watch`.
 5. Abra `http://10.206.168.97:5173`. A API responde no mesmo IP em
    `http://10.206.168.97:333` e o frontend encaminha `/api` para esse endereço.
 
