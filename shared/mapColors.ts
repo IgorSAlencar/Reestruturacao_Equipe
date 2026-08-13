@@ -68,6 +68,18 @@ export function shadeColor(color:string,factor=0.62){
   return `#${[r,g,b].map(n=>n.toString(16).padStart(2,'0')).join('')}`;
 }
 
+/** Aproxima uma cor hex do branco para representar a visão atual. */
+export function lightenColor(color:string,factor=0.48){
+  const hex=color.trim().replace('#','');
+  if(!/^[0-9a-f]{6}$/i.test(hex))return color;
+  const value=parseInt(hex,16);
+  const channel=(shift:number)=>{
+    const current=(value>>shift)&255;
+    return Math.round(current+(255-current)*factor);
+  };
+  return `#${[channel(16),channel(8),channel(0)].map(n=>n.toString(16).padStart(2,'0')).join('')}`;
+}
+
 /** @deprecated Use markerColor ou territoryColor conforme o contexto. */
 export function poleColor(pole:ColoredPole,poles:ColoredPole[]){
   return territoryColor(pole,poles);

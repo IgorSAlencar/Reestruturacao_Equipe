@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import './styles.css';
+import './comparison.css';
 import App from './App';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>);

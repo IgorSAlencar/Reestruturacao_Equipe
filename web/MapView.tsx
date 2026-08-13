@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import mapboxgl, { type GeoJSONSource, type Map as MapboxMap, type MapMouseEvent } from 'mapbox-gl';
 import type { FeatureCollection, Geometry } from 'geojson';
 import type { RegionalOffice, ScenarioData } from '../shared/types';
+import type { PoleMovement } from '../shared/scenarioComparison';
 import { populationBandIndex, POPULATION_BANDS } from '../shared/population';
-import { EXCLUDED_MUNICIPALITY_COLOR, EXCLUDED_MUNICIPALITY_STROKE, markerColor, PENDING_ASSIGN_COLOR, PENDING_ASSIGN_STROKE, shadeColor, territoryColor } from '../shared/mapColors';
+import { areaColor, EXCLUDED_MUNICIPALITY_COLOR, EXCLUDED_MUNICIPALITY_STROKE, lightenColor, markerColor, PENDING_ASSIGN_COLOR, PENDING_ASSIGN_STROKE, shadeColor, territoryColor } from '../shared/mapColors';
 import { circlePolygon } from '../shared/geo';
 
 type Props={
@@ -22,6 +23,10 @@ type Props={
   showRegionals:boolean;
   regionals:RegionalOffice[];
   showPoles:boolean;
+  comparisonPoles:ScenarioData['poles'];
+  movements:PoleMovement[];
+  showComparisonPoles:boolean;
+  showMovementLines:boolean;
   editable:boolean;
   radiusKm:number;
   onPole:(id:string)=>void;
@@ -344,7 +349,8 @@ export default function MapView(p:Props){
         'territory-fill','territory-outline','territory-stitch','municipality-line',
         'district-fill','district-line-halo','district-line',
         'selection-wave',
-        'brazil-outline','state-outline','radius-fill','radius-outline','poles-circle',
+        'brazil-outline','state-outline','comparison-movements','current-poles-circle',
+        'radius-fill','radius-outline','poles-circle',
         'regionals-circle','regionals-label',
       ]){
         if(m.getLayer(id))m.moveLayer(id);
@@ -427,6 +433,21 @@ export default function MapView(p:Props){
         'line-color':'#fbbf24',
         'line-width':['interpolate',['linear'],['zoom'],4,0.9,8,2.1,12,3.2],
         'line-opacity':0.98,
+      }});
+      m.addSource('comparison-movements',{type:'geojson',data:emptyPoints()});
+      m.addLayer({id:'comparison-movements',type:'line',source:'comparison-movements',...(isStandardStyle?{slot:'top' as const}:{}),layout:{'line-join':'round','line-cap':'round'},paint:{
+        'line-color':['get','color'],
+        'line-width':['interpolate',['linear'],['zoom'],3,1,8,2.2],
+        'line-opacity':0.72,
+        'line-dasharray':[2.4,1.8],
+      }});
+      m.addSource('current-poles',{type:'geojson',data:emptyPoints()});
+      m.addLayer({id:'current-poles-circle',type:'circle',source:'current-poles',...(isStandardStyle?{slot:'top' as const}:{}),paint:{
+        'circle-radius':9,
+        'circle-color':['get','color'],
+        'circle-stroke-width':1.5,
+        'circle-stroke-color':'#ffffff',
+        'circle-opacity':0.72,
       }});
       m.addSource('poles',{type:'geojson',data:emptyPoints()});
       m.addLayer({id:'poles-circle',type:'circle',source:'poles',...(isStandardStyle?{slot:'top' as const}:{}),paint:{
@@ -520,7 +541,7 @@ export default function MapView(p:Props){
       };
       const showMunicipality=(e:mapboxgl.MapLayerMouseEvent)=>{
         // Prioriza marker de polo/regional: não seleciona o município sob o ponto.
-        if(m.queryRenderedFeatures(e.point,{layers:['poles-circle','regionals-circle']}).length)return;
+        if(m.queryRenderedFeatures(e.point,{layers:['poles-circle','current-poles-circle','regionals-circle']}).length)return;
         // Malha distrital ativa: abre o card do distrito (não o do município).
         if(tryShowDistrict(e.point,e.lngLat,e.originalEvent))return;
         const feature=e.features?.[0];
@@ -571,7 +592,7 @@ export default function MapView(p:Props){
       // Clique global: garante hit no distrito mesmo quando outra fill está acima.
       m.on('click',(e:MapMouseEvent)=>{
         if(e.originalEvent.shiftKey)return;
-        if(m.queryRenderedFeatures(e.point,{layers:['poles-circle','regionals-circle']}).length)return;
+        if(m.queryRenderedFeatures(e.point,{layers:['poles-circle','current-poles-circle','regionals-circle']}).length)return;
         tryShowDistrict(e.point,e.lngLat,e.originalEvent);
       });
       m.on('click','territory-fill',showMunicipality);
@@ -596,6 +617,17 @@ export default function MapView(p:Props){
         popup.current=new mapboxgl.Popup({closeButton:true,closeOnClick:true,offset:18,maxWidth:'320px'})
           .setLngLat([regional.longitude,regional.latitude])
           .setDOMContent(regionalCard(regional))
+          .addTo(m);
+      });
+      m.on('click','current-poles-circle',(e)=>{
+        e.originalEvent.stopPropagation();
+        const id=String(e.features?.[0]?.properties?.id||'');
+        const pole=callbacks.current.comparisonPoles.find(item=>item.id===id);
+        if(!pole)return;
+        popup.current?.remove();
+        popup.current=new mapboxgl.Popup({closeButton:true,closeOnClick:true,offset:14,maxWidth:'300px'})
+          .setLngLat([pole.longitude,pole.latitude])
+          .setDOMContent(currentPoleCard(pole))
           .addTo(m);
       });
       m.on('mousedown','poles-circle',(e)=>{
@@ -626,7 +658,7 @@ export default function MapView(p:Props){
         }
       });
       m.on('moveend',()=>updatePoleSource(m,callbacks.current));
-      for(const layer of ['district-fill','territory-fill','portfolio-fill','municipality-fill','poles-circle','regionals-circle']){
+      for(const layer of ['district-fill','territory-fill','portfolio-fill','municipality-fill','poles-circle','current-poles-circle','regionals-circle']){
         m.on('mouseenter',layer,()=>{m.getCanvas().style.cursor=callbacks.current.editable&&layer==='poles-circle'?'grab':'pointer';});
         m.on('mouseleave',layer,()=>{if(!dragPole.current)m.getCanvas().style.cursor='';});
       }
@@ -959,6 +991,30 @@ export default function MapView(p:Props){
   useEffect(()=>{
     const m=map.current;
     if(!m||!styleReady)return;
+    const areas=[...new Set([...(p.data?.poles||[]),...p.comparisonPoles].map(pole=>pole.area))];
+    const visibleCurrent=p.showComparisonPoles?p.comparisonPoles.filter(pole=>!p.selectedArea||pole.area===p.selectedArea):[];
+    (m.getSource('current-poles') as GeoJSONSource|undefined)?.setData({
+      type:'FeatureCollection',
+      features:visibleCurrent.map(pole=>({
+        type:'Feature' as const,
+        properties:{id:pole.id,name:pole.name,area:pole.area,color:lightenColor(areaColor(pole.area,areas))},
+        geometry:{type:'Point' as const,coordinates:[pole.longitude,pole.latitude]},
+      })),
+    });
+    const visibleMovements=p.showComparisonPoles&&p.showMovementLines?p.movements.filter(movement=>!p.selectedArea||movement.current.area===p.selectedArea||movement.proposed.area===p.selectedArea):[];
+    (m.getSource('comparison-movements') as GeoJSONSource|undefined)?.setData({
+      type:'FeatureCollection',
+      features:visibleMovements.map(movement=>({
+        type:'Feature' as const,
+        properties:{currentId:movement.current.id,proposedId:movement.proposed.id,distanceKm:movement.distanceKm,color:lightenColor(areaColor(movement.current.area,areas),.28)},
+        geometry:{type:'LineString' as const,coordinates:[[movement.current.longitude,movement.current.latitude],[movement.proposed.longitude,movement.proposed.latitude]]},
+      })),
+    });
+  },[p.data,p.comparisonPoles,p.movements,p.showComparisonPoles,p.showMovementLines,p.selectedArea,styleReady]);
+
+  useEffect(()=>{
+    const m=map.current;
+    if(!m||!styleReady)return;
     const features=p.showRegionals?p.regionals.map(regional=>({
       type:'Feature' as const,
       properties:{id:regional.id,name:regional.name},
@@ -1112,5 +1168,18 @@ function regionalCard(regional:RegionalOffice){
   const address=document.createElement('p');
   address.textContent=regional.address||'Endereço não informado';
   card.append(eyebrow,title,agencies,address);
+  return card;
+}
+
+function currentPoleCard(pole:ScenarioData['poles'][number]){
+  const card=document.createElement('article');
+  card.className='municipality-card';
+  const eyebrow=document.createElement('small');
+  eyebrow.textContent='POLO NA VISÃO ATUAL';
+  const title=document.createElement('h3');
+  title.textContent=pole.name;
+  const detail=document.createElement('p');
+  detail.textContent=`${pole.area}${pole.uf?` · ${pole.uf}`:''}`;
+  card.append(eyebrow,title,detail);
   return card;
 }
