@@ -64,6 +64,57 @@ JavaScript puro e não depende de `tsx`.
 
 Abra qualquer cenário no Builder, arraste polos, selecione unidades territoriais e atribua-as manualmente ou redistribua a seleção entre polos da mesma gerência de área. Rascunhos são persistidos localmente em SQLite com controle de revisão.
 
+## Análise de um cenário do Builder
+
+O script `Analisar_Cenario_Builder.py` compara um JSON exportado pelo Builder
+com o cenário **Atual**. Aceita o envelope do rascunho (`id`, `name`, `revision`
+e o cenário em `data.poles` / `data.units`) ou um `ScenarioData` bruto. As
+distâncias são recalculadas por Haversine; a comparação carteira a carteira só
+acontece quando o `pole_id` é o mesmo nos dois cenários.
+
+Na pasta do projeto:
+
+```powershell
+python -m pip install -r requirements-v5.txt
+python Analisar_Cenario_Builder.py --builder-json caminho\cenario-builder.json
+```
+
+Por padrão a comparação usa `.territorios-data/current.json` e grava um Excel e
+um Markdown em `analise_builder`. Para escolher a pasta de saída ou outro
+cenário atual:
+
+```powershell
+python Analisar_Cenario_Builder.py --builder-json caminho\cenario-builder.json --output-dir .\analise_builder
+python Analisar_Cenario_Builder.py --builder-json caminho\cenario-builder.json --current-json .\outro-atual.json
+```
+
+O terminal imprime os caminhos dos relatórios, por exemplo:
+
+```text
+Excel: C:\Users\Igor\Desktop\Reestruturacao_Equipe\analise_builder\analise_cenarios_20260813_234800.xlsx
+Markdown: C:\Users\Igor\Desktop\Reestruturacao_Equipe\analise_builder\analise_cenarios_20260813_234800.md
+Ocorrências de qualidade: 12
+```
+
+O que olhar no resultado:
+
+| Aba / seção | Para quê |
+|---|---|
+| **Resumo** | Totais nacionais: municípios, correspondentes, população, km médio/P90/máximo |
+| **Comparacao_Carteiras** | Delta por polo (mesmo `pole_id`) |
+| **Movimentacoes** | Unidades que mudaram de polo |
+| **Gerencias_Area** | Impacto por gerência |
+| **Insights** | Achados automáticos (pior distância, maior variação, etc.) |
+| **Qualidade_Dados** | Erros e avisos (polo sem coordenada, unidade órfã, etc.) |
+
+Se der erro:
+
+- `Cenário atual não encontrado` → no app, use **Atualizar lojas** para gerar `.territorios-data/current.json`
+- `A exportação Excel requer openpyxl` → rode de novo o `pip install -r requirements-v5.txt`
+- `JSON do Builder não encontrado` → o arquivo precisa estar na pasta de onde você rodou o comando, ou use o caminho completo
+
+O script só analisa; ele não altera o rascunho nem o mapa.
+
 ## Camadas do mapa
 
 O mapa usa projeção Mercator. Cada `DESC_GERENCIA_AREA` recebe uma cor própria;

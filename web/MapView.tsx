@@ -1069,44 +1069,46 @@ export default function MapView(p:Props){
 
   return <>
     <div ref={container} className="map"/>
-    <button
-      type="button"
-      className={`style-toggle${useStandard?' active':''}`}
-      aria-pressed={useStandard}
-      title={useStandard?'Estilo padrão do app':'Estilo Mapbox Standard'}
-      aria-label={useStandard?'Estilo padrão do app':'Estilo Mapbox Standard'}
-      onClick={()=>setUseStandard(v=>!v)}
-    >
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M4 7.5 12 4l8 3.5v9L12 20l-8-3.5v-9z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/>
-        <path d="M12 4v16M4 7.5l8 3.5 8-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/>
-      </svg>
-    </button>
-    <button
-      type="button"
-      className={`district-mesh-toggle${showDistrictMesh?' active':''}`}
-      aria-pressed={showDistrictMesh}
-      title={showDistrictMesh?'Ocultar malha distrital (≥300 mil)':'Mostrar malha distrital (≥300 mil)'}
-      aria-label={showDistrictMesh?'Ocultar malha distrital':'Mostrar malha distrital'}
-      onClick={()=>setShowDistrictMesh(v=>!v)}
-    >
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M4 4h16v16H4V4z" fill="none" stroke="currentColor" strokeWidth="1.8"/>
-        <path d="M4 12h16M12 4v16M8 4v8M16 12v8M4 8h8M12 16h8" fill="none" stroke="currentColor" strokeWidth="1.5"/>
-      </svg>
-    </button>
-    <button
-      type="button"
-      className={`mesh-toggle${showMesh?' active':''}`}
-      aria-pressed={showMesh}
-      title={showMesh?'Ocultar malha municipal':'Mostrar malha municipal'}
-      aria-label={showMesh?'Ocultar malha municipal':'Mostrar malha municipal'}
-      onClick={()=>setShowMesh(v=>!v)}
-    >
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 0h6v6h-6v-6z" fill="none" stroke="currentColor" strokeWidth="1.8"/>
-      </svg>
-    </button>
+    <div className="map-tools">
+      <button
+        type="button"
+        className={`map-tool${useStandard?' active':''}`}
+        aria-pressed={useStandard}
+        title={useStandard?'Estilo padrão do app':'Estilo Mapbox Standard'}
+        aria-label={useStandard?'Estilo padrão do app':'Estilo Mapbox Standard'}
+        onClick={()=>setUseStandard(v=>!v)}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7.5 12 4l8 3.5v9L12 20l-8-3.5v-9z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/>
+          <path d="M12 4v16M4 7.5l8 3.5 8-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/>
+        </svg>
+      </button>
+      <button
+        type="button"
+        className={`map-tool map-tool-district${showDistrictMesh?' active':''}`}
+        aria-pressed={showDistrictMesh}
+        title={showDistrictMesh?'Ocultar malha distrital (≥300 mil)':'Mostrar malha distrital (≥300 mil)'}
+        aria-label={showDistrictMesh?'Ocultar malha distrital':'Mostrar malha distrital'}
+        onClick={()=>setShowDistrictMesh(v=>!v)}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 4h16v16H4V4z" fill="none" stroke="currentColor" strokeWidth="1.8"/>
+          <path d="M4 12h16M12 4v16M8 4v8M16 12v8M4 8h8M12 16h8" fill="none" stroke="currentColor" strokeWidth="1.5"/>
+        </svg>
+      </button>
+      <button
+        type="button"
+        className={`map-tool${showMesh?' active':''}`}
+        aria-pressed={showMesh}
+        title={showMesh?'Ocultar malha municipal':'Mostrar malha municipal'}
+        aria-label={showMesh?'Ocultar malha municipal':'Mostrar malha municipal'}
+        onClick={()=>setShowMesh(v=>!v)}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 0h6v6h-6v-6z" fill="none" stroke="currentColor" strokeWidth="1.8"/>
+        </svg>
+      </button>
+    </div>
   </>;
 }
 

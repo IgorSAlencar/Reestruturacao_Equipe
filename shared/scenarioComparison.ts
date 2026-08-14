@@ -58,3 +58,20 @@ export function compareAreaCounts(current:Record<string,number>,proposed:Record<
     .sort((a,b)=>a.localeCompare(b,'pt-BR'))
     .map(area=>({area,current:current[area]||0,proposed:proposed[area]||0,delta:(proposed[area]||0)-(current[area]||0)}));
 }
+
+export function countPolesByArea(poles:{area:string}[]){
+  const counts:Record<string,number>={};
+  for(const pole of poles){
+    const area=String(pole.area||'').trim()||'SEM ÁREA';
+    counts[area]=(counts[area]||0)+1;
+  }
+  return counts;
+}
+
+/** Reusa o nome já existente (acentos/caixa) ou normaliza uma gerência nova. */
+export function resolveAreaName(raw:string,known:string[]=[]){
+  const trimmed=raw.trim().replace(/\s+/g,' ');
+  if(!trimmed)return '';
+  const match=known.find(area=>area.localeCompare(trimmed,'pt-BR',{sensitivity:'base'})===0);
+  return match||trimmed.toUpperCase();
+}

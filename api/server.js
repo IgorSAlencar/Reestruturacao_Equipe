@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { API_HOST, API_PORT, DATA_DIR, DISTRICTS_FILE, MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE, MUNICIPALITIES_FILE } from './config.js';
 import { createDraft, deleteDraft, getDraft, listDrafts, updateDraft } from './db.js';
 import { listScenarios, loadCurrent, loadScenario } from './scenarios.js';
-import { loadPopulation, loadRegionalOffices, refreshCurrentCache } from './currentCache.js';
+import { loadExcludedMunicipalities, loadPopulation, loadRegionalOffices, refreshCurrentCache } from './currentCache.js';
 import { getMunicipalityCenters } from './municipalityCenters.js';
 import { closeSqlPool, testSqlConnection } from './sqlServer.js';
 

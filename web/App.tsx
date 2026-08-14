@@ -4,8 +4,10 @@ import { calculatePoleMetrics, contiguousWithinRadius, haversineKm, mergeDuplica
 import { POPULATION_BANDS } from '../shared/population';
 import { api, type ExcludedMunicipalitiesResponse, type PopulationResponse, type RegionalOfficesResponse } from './api';
 import MapView from './MapView';
+import MunicipalitySizeBreakdown from './MunicipalitySizeBreakdown';
+import PoleAreaTransfer from './PoleAreaTransfer';
 import { areaColor, territoryColor } from '../shared/mapColors';
-import { compareAreaCounts, matchPoleMovements } from '../shared/scenarioComparison';
+import { compareAreaCounts, countPolesByArea, matchPoleMovements, resolveAreaName } from '../shared/scenarioComparison';
 
 const fmt=new Intl.NumberFormat('pt-BR',{maximumFractionDigits:0});
 const km=new Intl.NumberFormat('pt-BR',{maximumFractionDigits:1});
@@ -16,7 +18,7 @@ export default function App(){
   const importInput=useRef<HTMLInputElement>(null);
   const [config,setConfig]=useState({mapboxToken:'',mapboxStyle:'mapbox://styles/mapbox/dark-v11'}),[scenarios,setScenarios]=useState<ScenarioSummary[]>([]),[draftRefs,setDraftRefs]=useState<any[]>([]);
   const [active,setActive]=useState(''),[data,setData]=useState<ScenarioData|null>(null),[currentData,setCurrentData]=useState<ScenarioData|null>(null),[draft,setDraft]=useState<DraftData|null>(null),[selectedPole,setSelectedPole]=useState<string|null>(null),[selectedUnits,setSelectedUnits]=useState(new Set<string>()),[waveUnitId,setWaveUnitId]=useState<string|null>(null),[radiusKm,setRadiusKm]=useState(0),[selectedArea,setSelectedArea]=useState<string|null>(null),[showAll,setShowAll]=useState(false),[showPoles,setShowPoles]=useState(true),[showCurrentPoles,setShowCurrentPoles]=useState(false),[showMovementLines,setShowMovementLines]=useState(true),[showPopulation,setShowPopulation]=useState(false),[population,setPopulation]=useState<PopulationResponse|null>(null),[showRegionals,setShowRegionals]=useState(false),[regionals,setRegionals]=useState<RegionalOfficesResponse|null>(null),[showExcluded,setShowExcluded]=useState(false),[excludedMunicipalities,setExcludedMunicipalities]=useState<ExcludedMunicipalitiesResponse|null>(null),[loading,setLoading]=useState(true),[error,setError]=useState('');
-  const [past,setPast]=useState<Snapshot[]>([]),[future,setFuture]=useState<Snapshot[]>([]),[filter,setFilter]=useState(''),[portfolioQuery,setPortfolioQuery]=useState('');
+  const [past,setPast]=useState<Snapshot[]>([]),[future,setFuture]=useState<Snapshot[]>([]),[filter,setFilter]=useState(''),[portfolioQuery,setPortfolioQuery]=useState(''),[showMunicipalitySizes,setShowMunicipalitySizes]=useState(false);
   const [munCenters,setMunCenters]=useState<MunicipalityPlace[]>([]);
   const refreshLists=async()=>{const [s,d]=await Promise.all([api.scenarios(),api.drafts()]);setScenarios(s);setDraftRefs(d);setActive(current=>current||s[0]?.id||d[0]?.id||'');};
   useEffect(()=>{Promise.all([api.config(),refreshLists()]).then(([c])=>setConfig(c as any)).catch(e=>setError(e.message));},[]);
@@ -36,12 +38,13 @@ export default function App(){
     Promise.all([selectedRequest,currentRequest]).then(([x,current]:any[])=>{
       if(cancelled)return;
       if(ref){setDraft(x);setData(x.data);}else{setDraft(null);setData(x);}
-      setCurrentData(current);setSelectedPole(null);setSelectedArea(null);setSelectedUnits(new Set());setWaveUnitId(null);setRadiusKm(0);setPortfolioQuery('');setPast([]);setFuture([]);
+      setCurrentData(current);setSelectedPole(null);setSelectedArea(null);setSelectedUnits(new Set());setWaveUnitId(null);setRadiusKm(0);setPortfolioQuery('');setShowMunicipalitySizes(false);setPast([]);setFuture([]);
     }).catch(e=>{if(!cancelled)setError(e.message);}).finally(()=>{if(!cancelled)setLoading(false);});
     return()=>{cancelled=true;};
   },[active,draftRefs.length]);
   const selected=data?.poles.find(p=>p.id===selectedPole)||null;
   const metrics=selected&&data?calculatePoleMetrics(selected,data.units):null;
+  useEffect(()=>{setShowMunicipalitySizes(false);},[selectedPole]);
   const portfolio=useMemo(()=>{
     if(!selected||!data)return [];
     return uniqueUnitsByMunicipality(
@@ -87,6 +90,12 @@ export default function App(){
     return contiguousWithinRadius(selected.latitude,selected.longitude,radiusKm,placesForRadius);
   },[selected,radiusKm,placesForRadius]);
   const selectedFromPortfolio=portfolio.filter(({unit})=>selectedUnits.has(unit.id)).length;
+  const municipalityPopulations=useMemo(()=>portfolio
+    .filter(({unit})=>unit.type!=='DISTRITO')
+    .map(({unit})=>{
+      const code=normalizeMunicipalityCode(unit.municipalityCode);
+      return population?.values?.[code]??unit.population??0;
+    }),[portfolio,population]);
   const nextUnitSelection=(old:Set<string>,id:string,additive=false)=>{
     const keepExisting=!!draft||additive;
     if(!keepExisting&&old.size===1&&old.has(id))return new Set<string>();
@@ -225,8 +234,23 @@ export default function App(){
   };
   const clearRadius=()=>{setRadiusKm(0);};
   const pushHistory=()=>{if(!data)return;setPast(x=>[...x.slice(-39),{poles:structuredClone(data.poles),units:structuredClone(data.units)}]);setFuture([]);};
-  const mutate=(fn:(d:ScenarioData)=>ScenarioData)=>{if(!data||!draft)return;pushHistory();const next=fn(structuredClone(data));setData(next);setDraft({...draft,data:next});};
+  const syncSummary=(d:ScenarioData):ScenarioData=>({...d,summary:{...d.summary,poleCount:d.poles.length,areaCounts:countPolesByArea(d.poles)}});
+  const applyScenario=(next:ScenarioData)=>{
+    const synced=syncSummary(next);
+    setData(synced);
+    setDraft(current=>current?{...current,data:synced}:current);
+    return synced;
+  };
+  const mutate=(fn:(d:ScenarioData)=>ScenarioData)=>{if(!data||!draft)return;pushHistory();applyScenario(fn(structuredClone(data)));};
   const movePole=(id:string,longitude:number,latitude:number)=>mutate(d=>{const p=d.poles.find(x=>x.id===id);if(p){p.longitude=longitude;p.latitude=latitude;}d.units.filter(u=>u.poleId===id).forEach(u=>u.distanceKm=haversineKm(latitude,longitude,u.latitude,u.longitude));return d;});
+  const changePoleArea=(poleId:string,rawArea:string)=>{
+    const known=[...new Set([...(data?.poles||[]).map(pole=>pole.area),...(currentData?.poles||[]).map(pole=>pole.area)])];
+    const area=resolveAreaName(rawArea,known);
+    const pole=data?.poles.find(item=>item.id===poleId);
+    if(!area||!pole||pole.area===area)return;
+    mutate(d=>{const target=d.poles.find(item=>item.id===poleId);if(target)target.area=area;return d;});
+    if(selectedArea===pole.area)setSelectedArea(area);
+  };
   const assign=()=>{
     if(!selectedPole||!selectedUnits.size)return;
     const ids=new Set(selectedUnits);
@@ -269,8 +293,8 @@ export default function App(){
   };
   const removeFromPortfolio=()=>{if(!selectedPole||!selectedFromPortfolio)return;mutate(d=>{d.units.filter(u=>u.poleId===selectedPole&&selectedUnits.has(u.id)).forEach(u=>{u.poleId=null;u.distanceKm=0;});return d;});clearSelection();};
   const redistribute=()=>{if(!selected||!selectedUnits.size)return;mutate(d=>{const candidates=d.poles.filter(p=>p.area===selected.area);d.units.filter(u=>selectedUnits.has(u.id)).forEach(u=>{const p=candidates.reduce((best,p)=>haversineKm(u.latitude,u.longitude,p.latitude,p.longitude)<haversineKm(u.latitude,u.longitude,best.latitude,best.longitude)?p:best,candidates[0]);u.poleId=p.id;u.distanceKm=haversineKm(u.latitude,u.longitude,p.latitude,p.longitude);});return d;});clearSelection();};
-  const undo=()=>{if(!data||!past.length)return;const prev=past.at(-1)!;setFuture(x=>[{poles:data.poles,units:data.units},...x]);const next={...data,poles:prev.poles,units:prev.units};setData(next);setDraft(d=>d?{...d,data:next}:d);setPast(x=>x.slice(0,-1));};
-  const redo=()=>{if(!data||!future.length)return;const next=future[0];setPast(x=>[...x,{poles:data.poles,units:data.units}]);const nd={...data,poles:next.poles,units:next.units};setData(nd);setDraft(d=>d?{...d,data:nd}:d);setFuture(x=>x.slice(1));};
+  const undo=()=>{if(!data||!past.length)return;const prev=past.at(-1)!;setFuture(x=>[{poles:data.poles,units:data.units},...x]);applyScenario({...data,poles:prev.poles,units:prev.units});setPast(x=>x.slice(0,-1));};
+  const redo=()=>{if(!data||!future.length)return;const next=future[0];setPast(x=>[...x,{poles:data.poles,units:data.units}]);applyScenario({...data,poles:next.poles,units:next.units});setFuture(x=>x.slice(1));};
   const createBuilder=async()=>{if(!data)return;const name=`Builder — ${data.summary.name}`;const d=await api.createDraft(name,data.summary.id,{...structuredClone(data),summary:{...data.summary,id:'draft',name,kind:'draft'}});await refreshLists();setActive(d.id);};
   const downloadBlob=(blob:Blob,filename:string)=>{
     const url=URL.createObjectURL(blob);
@@ -282,7 +306,7 @@ export default function App(){
   };
   const persistDraft=async()=>{
     if(!draft||!data)throw new Error('Nenhum rascunho ativo.');
-    const saved=await api.saveDraft({...draft,data});
+    const saved=await api.saveDraft({...draft,data:syncSummary(data)});
     setDraft(saved);
     setData(saved.data);
     return saved;
@@ -351,7 +375,9 @@ export default function App(){
   };
   const comparisonAvailable=!!currentData&&active!=='current';
   const movements=useMemo(()=>comparisonAvailable&&data?matchPoleMovements(currentData.poles,data.poles):[],[comparisonAvailable,currentData,data]);
-  const areaImpacts=useMemo(()=>compareAreaCounts(comparisonAvailable?currentData?.summary.areaCounts||{}:{},data?.summary.areaCounts||{}),[comparisonAvailable,currentData,data]);
+  const proposedAreaCounts=useMemo(()=>countPolesByArea(data?.poles||[]),[data]);
+  const currentAreaCounts=useMemo(()=>countPolesByArea(currentData?.poles||[]),[currentData]);
+  const areaImpacts=useMemo(()=>compareAreaCounts(comparisonAvailable?currentAreaCounts:{},proposedAreaCounts),[comparisonAvailable,currentAreaCounts,proposedAreaCounts]);
   const areas=useMemo(()=>areaImpacts.filter(item=>item.area.toLowerCase().includes(filter.toLowerCase())),[areaImpacts,filter]);
   const areaNames=useMemo(()=>areaImpacts.map(item=>item.area),[areaImpacts]);
   const totalImpact=(data?.poles.length||0)-(comparisonAvailable?currentData.poles.length:0);
@@ -369,9 +395,50 @@ export default function App(){
   return <main className="shell">
     <header className="topbar"><div className="brand"><span className="brand-mark">T</span><div><strong>Territórios BE</strong><small>Planejamento de cobertura</small></div></div>
       <select value={active} onChange={e=>setActive(e.target.value)} aria-label="Cenário">{options.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</select>
-      <div className="top-actions"><button className={showPopulation?'heat-active':''} onClick={togglePopulation}>{showPopulation?'Ocultar população':'Mapa de calor'}</button>{comparisonAvailable&&<><button className={showCurrentPoles?'comparison-active':''} onClick={()=>setShowCurrentPoles(value=>!value)}>{showCurrentPoles?'Ocultar visão atual':'Comparar com atual'}</button>{showCurrentPoles&&<button className={showMovementLines?'movement-active':''} onClick={()=>setShowMovementLines(value=>!value)}>{showMovementLines?'Ocultar movimentos':'Mostrar movimentos'}</button>}</>}<button className={!showPoles?'poles-hidden':''} onClick={()=>setShowPoles(value=>!value)}>{showPoles?'Ocultar polos comerciais':'Mostrar polos comerciais'}</button><button className={showExcluded?'excluded-active':''} onClick={toggleExcluded}>{showExcluded?`Ocultar excluídos (${excludedMunicipalities?.count||0})`:'Municípios excluídos'}</button><button className={showRegionals?'regional-active':''} onClick={toggleRegionals}>{showRegionals?`Ocultar regionais (${regionals?.count||0})`:'Gerências regionais'}</button><button className={showAll?'primary':''} onClick={()=>setShowAll(x=>!x)}>{showAll?'Ocultar carteiras':'Mostrar todas as áreas'}</button><button onClick={refreshCurrent}>Atualizar lojas</button><button onClick={()=>importInput.current?.click()}>Importar</button><input ref={importInput} hidden type="file" accept="application/json,.json" onChange={e=>importDraft(e.target.files?.[0])}/>{!draft&&data&&<button className="accent" onClick={createBuilder}>Abrir no Builder</button>}{draft&&<><button disabled={!past.length} onClick={undo}>↶</button><button disabled={!future.length} onClick={redo}>↷</button><button className="button-link" onClick={exportJson}>JSON</button><button className="button-link" onClick={exportGeojson}>GeoJSON</button><button className="accent" onClick={save}>Salvar rascunho</button></>}</div>
+      <div className="top-actions">
+        <div className="icon-cluster">
+          <IconBtn className={showPopulation?'heat-active':''} pressed={showPopulation} label={showPopulation?'Ocultar população':'Mapa de calor'} onClick={togglePopulation}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18h16M6 18l3-8 3 5 2-3 4 6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round"/></svg>
+          </IconBtn>
+          {comparisonAvailable&&<>
+            <IconBtn className={showCurrentPoles?'comparison-active':''} pressed={showCurrentPoles} label={showCurrentPoles?'Ocultar visão atual':'Comparar com atual'} onClick={()=>setShowCurrentPoles(value=>!value)}>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="12" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.8"/><circle cx="15" cy="12" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.8"/></svg>
+            </IconBtn>
+            {showCurrentPoles&&<IconBtn className={showMovementLines?'movement-active':''} pressed={showMovementLines} label={showMovementLines?'Ocultar movimentos':'Mostrar movimentos'} onClick={()=>setShowMovementLines(value=>!value)}>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 16h8M13 16l-2.5-2.5M13 16l-2.5 2.5M19 8H11M11 8l2.5-2.5M11 8l2.5 2.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            </IconBtn>}
+          </>}
+          <IconBtn className={!showPoles?'poles-hidden':''} pressed={showPoles} label={showPoles?'Ocultar polos comerciais':'Mostrar polos comerciais'} onClick={()=>setShowPoles(value=>!value)}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6-5.4-6-10a6 6 0 1 1 12 0c0 4.6-6 10-6 10z" fill="none" stroke="currentColor" strokeWidth="1.8"/><circle cx="12" cy="11" r="2" fill="currentColor"/></svg>
+          </IconBtn>
+          <IconBtn className={showExcluded?'excluded-active':''} pressed={showExcluded} label={showExcluded?`Ocultar excluídos (${excludedMunicipalities?.count||0})`:'Municípios excluídos'} onClick={toggleExcluded}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.8"/><path d="M7 7l10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
+          </IconBtn>
+          <IconBtn className={showRegionals?'regional-active':''} pressed={showRegionals} label={showRegionals?`Ocultar regionais (${regionals?.count||0})`:'Gerências regionais'} onClick={toggleRegionals}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V9l8-5 8 5v11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/><path d="M9 20v-6h6v6" fill="none" stroke="currentColor" strokeWidth="1.8"/></svg>
+          </IconBtn>
+          <IconBtn className={showAll?'primary':''} pressed={showAll} label={showAll?'Ocultar carteiras':'Mostrar todas as áreas'} onClick={()=>setShowAll(x=>!x)}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
+          </IconBtn>
+        </div>
+        <button onClick={refreshCurrent}>Atualizar lojas</button>
+        <button onClick={()=>importInput.current?.click()}>Importar</button>
+        <input ref={importInput} hidden type="file" accept="application/json,.json" onChange={e=>importDraft(e.target.files?.[0])}/>
+        {!draft&&data&&<button className="accent" onClick={createBuilder}>Abrir no Builder</button>}
+        {draft&&<>
+          <IconBtn label="Desfazer" disabled={!past.length} onClick={undo}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 8H5V4M5 8a8 8 0 1 1-1.5 6.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          </IconBtn>
+          <IconBtn label="Refazer" disabled={!future.length} onClick={redo}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 8h4V4M19 8a8 8 0 1 0 1.5 6.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          </IconBtn>
+          <button className="button-link" onClick={exportJson}>JSON</button>
+          <button className="button-link" onClick={exportGeojson}>GeoJSON</button>
+          <button className="accent" onClick={save}>Salvar rascunho</button>
+        </>}
+      </div>
     </header>
-    <section className="workspace"><aside className="legend-panel"><div className="panel-title"><div><small>AGRUPAMENTO</small><h2>Gerências de área</h2></div><b>{selectedArea?data?.poles.filter(pole=>pole.area===selectedArea).length:data?.poles.length||0}</b></div>{comparisonAvailable&&<div className="area-comparison-summary"><span>Atual <b>{currentData.poles.length}</b></span><span>→</span><span>Cenário <b>{data?.poles.length||0}</b></span><em className={totalImpact>0?'increase':totalImpact<0?'decrease':'stable'}>{totalImpact>0?'+':''}{totalImpact}</em></div>}<input placeholder="Filtrar área…" value={filter} onChange={e=>setFilter(e.target.value)}/><div className="area-list">{areas.map(item=><button key={item.area} className={selectedArea===item.area?'active':''} onClick={()=>{setSelectedArea(current=>current===item.area?null:item.area);setSelectedPole(null);clearSelection();setRadiusKm(0);setPortfolioQuery('');}}><i style={{background:areaColor(item.area,areaNames)}}/><span className="area-label">{item.area}</span>{comparisonAvailable?<span className="area-impact"><b>{item.proposed}</b><small className={item.delta>0?'increase':item.delta<0?'decrease':'stable'}>{item.delta>0?'+':''}{item.delta} vs. atual</small></span>:<b>{item.proposed}</b>}</button>)}</div>{selectedArea&&<button className="clear-area" onClick={()=>setSelectedArea(null)}>Mostrar todas as gerências</button>}<div className="hint"><span>●</span><div><b>{draft?'Modo edição ativo':'Modo exploração'}</b><small>{draft?'Arraste polos ou selecione territórios.':'Clique em um polo para ver sua carteira.'}</small></div></div></aside>
+    <section className="workspace"><aside className="legend-panel"><div className="panel-title"><div><small>AGRUPAMENTO</small><h2>Gerências de área</h2></div><b>{selectedArea?data?.poles.filter(pole=>pole.area===selectedArea).length:data?.poles.length||0}</b></div>{comparisonAvailable&&<div className="area-comparison-summary"><span>Atual <b>{currentData.poles.length}</b></span><span>→</span><span>Cenário <b>{data?.poles.length||0}</b></span><em className={totalImpact>0?'increase':totalImpact<0?'decrease':'stable'}>{totalImpact>0?'+':''}{totalImpact}</em></div>}<input placeholder="Filtrar área…" value={filter} onChange={e=>setFilter(e.target.value)}/><div className="area-list">{areas.map(item=><button key={item.area} className={selectedArea===item.area?'active':''} onClick={()=>{setSelectedArea(current=>current===item.area?null:item.area);setSelectedPole(null);clearSelection();setRadiusKm(0);setPortfolioQuery('');}}><i style={{background:areaColor(item.area,areaNames)}}/><span className="area-label">{item.area}</span>{comparisonAvailable?<span className="area-impact"><b>{item.proposed}</b><small className={item.delta>0?'increase':item.delta<0?'decrease':'stable'}>{item.delta>0?'+':''}{item.delta} vs. atual</small></span>:<b>{item.proposed}</b>}</button>)}</div>{selectedArea&&<button className="clear-area" onClick={()=>setSelectedArea(null)}>Mostrar todas as gerências</button>}<div className="hint"><span>●</span><div><b>{draft?'Modo edição ativo':'Modo exploração'}</b><small>{draft?'Troque a gerência de área, arraste polos ou selecione territórios.':'Clique em um polo para ver sua carteira.'}</small></div></div></aside>
       <div className="map-wrap">{config.mapboxToken?<MapView data={data} token={config.mapboxToken} styleUrl={config.mapboxStyle} selectedPole={selectedPole} selectedUnits={selectedUnits} waveUnitId={waveUnitId} selectedArea={selectedArea} showAll={showAll} showPoles={showPoles} comparisonPoles={currentData?.poles||[]} movements={movements} showComparisonPoles={showCurrentPoles} showMovementLines={showMovementLines} showPopulation={showPopulation} population={population?.values||{}} showExcluded={showExcluded} excludedCodes={excludedMunicipalities?.codes||[]} showRegionals={showRegionals} regionals={regionals?.points||[]} editable={!!draft} radiusKm={radiusKm} onPole={id=>{setSelectedPole(id);setWaveUnitId(null);setRadiusKm(0);setPortfolioQuery('');}} onUnit={selectFromMap} onStageMeshMunicipality={stageMeshMunicipality} onStageMeshDistrict={stageMeshDistrict} onMovePole={movePole} onBoxSelect={ids=>{
               const picked=(data?.units||[]).filter(unit=>ids.includes(unit.id));
               const unique=uniqueUnitsByMunicipality(picked,selectedPole);
@@ -381,14 +448,16 @@ export default function App(){
       <aside className="detail-panel">{selected&&metrics?<>
         {showAll&&<button className="back-area" onClick={()=>{setSelectedPole(null);clearSelection();setRadiusKm(0);setPortfolioQuery('');}}>← Voltar aos polos</button>}
         <div className="selection-head"><span style={{background:territoryColor(selected,data?.poles||[])}}/><div><small>POLO SELECIONADO</small><h2>{selected.name}</h2><p>{selected.area}{selected.uf?` · ${selected.uf}`:''}</p></div></div>
+        {draft&&<PoleAreaTransfer currentArea={selected.area} areas={areaNames} onChange={area=>changePoleArea(selected.id,area)}/>}
         <div className="metrics">
-          <Metric label="Municípios" value={fmt.format(metrics.municipalities)}/>
+          <Metric label="Municípios" value={fmt.format(metrics.municipalities)} hint="Clique para ver faixas de população" active={showMunicipalitySizes} onClick={()=>setShowMunicipalitySizes(open=>!open)}/>
           <Metric label="Lojas" value={fmt.format(metrics.stores)}/>
           <Metric label="População" value={fmt.format(metrics.population)}/>
           {metrics.districts>0
             ?<Metric label="Distritos" value={fmt.format(metrics.districts)}/>
             :<Metric label="Raio médio" value={`${km.format(metrics.meanKm)} km`}/>}
         </div>
+        {showMunicipalitySizes&&<MunicipalitySizeBreakdown populations={municipalityPopulations}/>}
         <h3>Distâncias da carteira</h3><div className="radius"><div><small>MÍNIMO</small><b>{km.format(metrics.minKm)} km</b></div><div><small>MÉDIO</small><b>{km.format(metrics.meanKm)} km</b></div><div><small>MÁXIMO</small><b>{km.format(metrics.maxKm)} km</b></div></div>
         {draft&&<div className="builder-actions">
           <div className="radius-tool">
@@ -424,4 +493,11 @@ export default function App(){
     </section>
   </main>;
 }
-function Metric({label,value}:{label:string;value:string}){return <div><small>{label}</small><b>{value}</b></div>}
+function Metric({label,value,hint,active,onClick}:{label:string;value:string;hint?:string;active?:boolean;onClick?:()=>void}){
+  const body=<><small>{label}</small><b>{value}</b></>;
+  if(!onClick)return <div>{body}</div>;
+  return <button type="button" className={active?'active':''} title={hint||label} aria-label={hint||label} aria-expanded={!!active} onClick={onClick}>{body}</button>;
+}
+function IconBtn({label,pressed,disabled,className='',onClick,children}:{label:string;pressed?:boolean;disabled?:boolean;className?:string;onClick:()=>void;children:React.ReactNode}){
+  return <button type="button" className={`icon-btn${className?` ${className}`:''}`} title={label} aria-label={label} aria-pressed={pressed} disabled={disabled} onClick={onClick}>{children}</button>;
+}

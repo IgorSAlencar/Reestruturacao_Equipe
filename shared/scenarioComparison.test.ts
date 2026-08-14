@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { Pole } from './types.ts';
-import { compareAreaCounts, matchPoleMovements } from './scenarioComparison.ts';
+import { compareAreaCounts, countPolesByArea, matchPoleMovements, resolveAreaName } from './scenarioComparison.ts';
 
 const pole=(id:string,area:string,longitude:number):Pole=>({
   id,name:id,area,longitude,latitude:0,source:'current',
@@ -24,5 +24,18 @@ describe('scenario comparison',()=>{
     assert.equal(matches.find(item=>item.current.id==='C1')?.proposed.id,'P1');
     assert.equal(matches.find(item=>item.current.id==='C2')?.proposed.id,'P3');
     assert.equal(new Set(matches.map(item=>item.proposed.id)).size,matches.length);
+  });
+
+  it('counts poles from the live area field',()=>{
+    assert.deepEqual(countPolesByArea([pole('1','Norte',0),pole('2','Norte',1),pole('3','Sul',2)]),{
+      Norte:2,
+      Sul:1,
+    });
+  });
+
+  it('reuses an existing area name ignoring case and accents',()=>{
+    assert.equal(resolveAreaName('sao paulo',['SÃO PAULO','SUL']),'SÃO PAULO');
+    assert.equal(resolveAreaName('  leste novo  ',['NORTE']),'LESTE NOVO');
+    assert.equal(resolveAreaName('   '),'');
   });
 });
