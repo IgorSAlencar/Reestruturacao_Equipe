@@ -32,7 +32,13 @@ app.get('/api/drafts/:id',(req,res)=>{const d=getDraft(req.params.id);d?res.json
 app.post('/api/drafts',(req,res)=>{const b=z.object({name:z.string().min(1),baseScenarioId:z.string(),data:z.any()}).parse(req.body);res.status(201).json(createDraft(randomUUID(),b.name,b.baseScenarioId,b.data));});
 app.put('/api/drafts/:id',(req,res)=>{const b=z.object({name:z.string().min(1),revision:z.number().int(),data:z.any()}).parse(req.body),result=updateDraft(req.params.id,b.name,b.revision,b.data);if(result==='conflict')return res.status(409).json({message:'Este rascunho foi alterado em outra aba.'});return result?res.json(result):res.status(404).json({message:'Rascunho não encontrado.'});});
 app.delete('/api/drafts/:id',(req,res)=>deleteDraft(req.params.id)?res.sendStatus(204):res.status(404).json({message:'Rascunho não encontrado.'}));
-app.get('/api/drafts/:id/export',(req,res)=>{const d=getDraft(req.params.id);if(!d)return res.status(404).json({message:'Rascunho não encontrado.'});res.attachment(`${d.id}.json`).json(d);});
+function sendUtf8JsonFile(res,filename,payload){
+  const body='\uFEFF'+JSON.stringify(payload,null,2);
+  res.setHeader('Content-Type','application/json; charset=utf-8');
+  res.setHeader('Content-Disposition',`attachment; filename="${filename}"`);
+  res.send(body);
+}
+app.get('/api/drafts/:id/export',(req,res)=>{const d=getDraft(req.params.id);if(!d)return res.status(404).json({message:'Rascunho não encontrado.'});sendUtf8JsonFile(res,`${d.id}.json`,d);});
 app.get('/api/drafts/:id/geojson',(req,res)=>{
   const d=getDraft(req.params.id);if(!d)return res.status(404).json({message:'Rascunho não encontrado.'});
   let base=d.data.territories;
@@ -148,7 +154,9 @@ app.get('/api/drafts/:id/geojson',(req,res)=>{
       }});
     }
   }
-  res.attachment(`${d.id}.geojson`).type('application/geo+json').json({type:'FeatureCollection',features});
+  res.setHeader('Content-Type','application/geo+json; charset=utf-8');
+  res.setHeader('Content-Disposition',`attachment; filename="${d.id}.geojson"`);
+  res.send(JSON.stringify({type:'FeatureCollection',features}));
 });
 let refreshing=false,lastRefreshError=null;
 app.get('/api/current-cache/status',(_,res)=>res.json({available:!!loadCurrent(),refreshing,lastError:lastRefreshError,dataDir:DATA_DIR}));

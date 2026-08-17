@@ -61,6 +61,31 @@ def scenario(poles: list[dict], units: list[dict], title: str = "Cenário") -> d
     }
 
 
+def test_load_scenario_preserves_accented_names_with_utf8_bom(tmp_path: Path) -> None:
+    payload = {
+        "id": "draft-acentos",
+        "name": "Builder — São Paulo",
+        "data": scenario(
+            [pole("1", 0, area="Gerência de Área 01")],
+            [
+                {
+                    **unit("U1", "3550308", "1", 1),
+                    "municipalityName": "São Paulo",
+                    "name": "São José dos Campos",
+                }
+            ],
+            "Proposto",
+        ),
+    }
+    path = tmp_path / "builder.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8-sig")
+    loaded = analyzer.load_scenario(path)
+    prepared = analyzer.prepare_scenario(loaded, "PROPOSTO")
+    assert loaded["poles"][0]["area"] == "Gerência de Área 01"
+    assert prepared.rows[0]["nome"] == "São José dos Campos"
+    assert "\ufffd" not in prepared.rows[0]["nome"]
+
+
 def test_accepts_raw_scenario_and_builder_envelope(tmp_path: Path) -> None:
     raw = scenario([pole("1", 0)], [unit("U1", "100", "1", 1)])
     envelope = {"id": "draft-1", "revision": 3, "data": raw}

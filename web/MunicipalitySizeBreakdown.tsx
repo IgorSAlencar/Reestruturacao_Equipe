@@ -8,17 +8,24 @@ export default function MunicipalitySizeBreakdown({populations}:{populations:num
   return (
     <div className="municipality-size-breakdown" role="region" aria-label="Municípios por faixa de população">
       <small>Por faixa de habitantes</small>
-      {bands.map(band=>{
-        const share=total?(band.count/total)*100:0;
-        return (
-          <div key={band.label}>
-            <i style={{background:band.color}}/>
-            <span>{band.label}</span>
-            <b>{fmt.format(band.count)}</b>
-            <em>{total?`${Math.round(share)}%`:'—'}</em>
-          </div>
-        );
-      })}
+      <ul>
+        {bands.map(band=>{
+          const share=total?(band.count/total)*100:0;
+          return (
+            <li key={band.label}>
+              <div className="size-row">
+                <i style={{background:band.color}} aria-hidden="true"/>
+                <span>{band.label}</span>
+                <b>{fmt.format(band.count)}</b>
+                <em>{total?`${Math.round(share)}%`:'—'}</em>
+              </div>
+              <div className="size-bar" aria-hidden="true">
+                <span style={{width:`${share}%`,background:band.color}}/>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

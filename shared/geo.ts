@@ -6,6 +6,37 @@ export const normalizeMunicipalityCode = (value: unknown) => {
   return digits.length === 6 ? `${digits}0` : digits.slice(0, 7);
 };
 
+const UF_BY_IBGE_PREFIX: Record<string, string> = {
+  '11': 'RO', '12': 'AC', '13': 'AM', '14': 'RR', '15': 'PA', '16': 'AP', '17': 'TO',
+  '21': 'MA', '22': 'PI', '23': 'CE', '24': 'RN', '25': 'PB', '26': 'PE', '27': 'AL',
+  '28': 'SE', '29': 'BA', '31': 'MG', '32': 'ES', '33': 'RJ', '35': 'SP', '41': 'PR',
+  '42': 'SC', '43': 'RS', '50': 'MS', '51': 'MT', '52': 'GO', '53': 'DF',
+};
+
+export function ufFromMunicipalityCode(code: unknown) {
+  const normalized = normalizeMunicipalityCode(code);
+  return UF_BY_IBGE_PREFIX[normalized.slice(0, 2)] || '';
+}
+
+export type PoleHostMunicipality = { code?: string; name?: string; uf?: string };
+
+/** Atualiza sede do polo (coordenadas + nome/UF do município hospedeiro). */
+export function relocatePoleSeat(pole: Pole, longitude: number, latitude: number, host?: PoleHostMunicipality) {
+  pole.longitude = longitude;
+  pole.latitude = latitude;
+  const code = normalizeMunicipalityCode(host?.code);
+  if (!code || code === '0000000') return pole;
+  const name = String(host?.name || '').trim();
+  const uf = String(host?.uf || ufFromMunicipalityCode(code) || '').trim();
+  pole.municipalityCode = code;
+  if (name) {
+    pole.name = name;
+    pole.municipalityName = name;
+  }
+  if (uf) pole.uf = uf;
+  return pole;
+}
+
 export function geometryCenter(geometry:Geometry):[number,number] {
   const points:[number,number][]=[];
   const visit=(value:unknown):void=>{
@@ -108,6 +139,22 @@ export function mergeDuplicateMunicipalities(units:TerritoryUnit[],poleId:string
 }
 
 export type MunicipalityPlace={code:string;name?:string;latitude:number;longitude:number};
+
+export function nearestMunicipalityPlace(latitude:number,longitude:number,places:MunicipalityPlace[]){
+  let best:MunicipalityPlace|undefined;
+  let bestDist=Infinity;
+  for(const place of places){
+    const code=normalizeMunicipalityCode(place.code);
+    if(!code||code==='0000000')continue;
+    if(!Number.isFinite(place.latitude)||!Number.isFinite(place.longitude))continue;
+    const dist=haversineKm(latitude,longitude,place.latitude,place.longitude);
+    if(dist<bestDist){
+      bestDist=dist;
+      best={...place,code};
+    }
+  }
+  return best;
+}
 
 /**
  * Municípios dentro do raio, crescendo de forma contígua a partir do centro (polo).

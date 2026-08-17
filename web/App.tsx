@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DraftData, Pole, ScenarioData, ScenarioSummary } from '../shared/types';
-import { calculatePoleMetrics, contiguousWithinRadius, haversineKm, mergeDuplicateMunicipalities, normalizeMunicipalityCode, uniqueUnitsByMunicipality, type MunicipalityPlace } from '../shared/geo';
+import { calculatePoleMetrics, contiguousWithinRadius, haversineKm, mergeDuplicateMunicipalities, nearestMunicipalityPlace, normalizeMunicipalityCode, relocatePoleSeat, ufFromMunicipalityCode, uniqueUnitsByMunicipality, type MunicipalityPlace, type PoleHostMunicipality } from '../shared/geo';
 import { POPULATION_BANDS } from '../shared/population';
 import { api, type ExcludedMunicipalitiesResponse, type PopulationResponse, type RegionalOfficesResponse } from './api';
 import MapView from './MapView';
@@ -242,7 +242,26 @@ export default function App(){
     return synced;
   };
   const mutate=(fn:(d:ScenarioData)=>ScenarioData)=>{if(!data||!draft)return;pushHistory();applyScenario(fn(structuredClone(data)));};
-  const movePole=(id:string,longitude:number,latitude:number)=>mutate(d=>{const p=d.poles.find(x=>x.id===id);if(p){p.longitude=longitude;p.latitude=latitude;}d.units.filter(u=>u.poleId===id).forEach(u=>u.distanceKm=haversineKm(latitude,longitude,u.latitude,u.longitude));return d;});
+  const movePole=(id:string,longitude:number,latitude:number,host?:PoleHostMunicipality)=>mutate(d=>{
+    const pole=d.poles.find(item=>item.id===id);
+    if(!pole)return d;
+    const hinted=normalizeMunicipalityCode(host?.code);
+    const place=hinted&&hinted!=='0000000'
+      ?placesForRadius.find(item=>item.code===hinted)||{code:hinted,name:host?.name,latitude,longitude}
+      :nearestMunicipalityPlace(latitude,longitude,placesForRadius);
+    const unit=place?.code
+      ?d.units.find(item=>item.type!=='DISTRITO'&&normalizeMunicipalityCode(item.municipalityCode)===place.code)
+      :undefined;
+    relocatePoleSeat(pole,longitude,latitude,place?{
+      code:place.code,
+      name:host?.name||place.name||unit?.municipalityName,
+      uf:host?.uf||unit?.uf||ufFromMunicipalityCode(place.code),
+    }:undefined);
+    d.units.filter(unit=>unit.poleId===id).forEach(unit=>{
+      unit.distanceKm=haversineKm(latitude,longitude,unit.latitude,unit.longitude);
+    });
+    return d;
+  });
   const changePoleArea=(poleId:string,rawArea:string)=>{
     const known=[...new Set([...(data?.poles||[]).map(pole=>pole.area),...(currentData?.poles||[]).map(pole=>pole.area)])];
     const area=resolveAreaName(rawArea,known);
@@ -304,6 +323,10 @@ export default function App(){
     link.click();
     URL.revokeObjectURL(url);
   };
+  const downloadUtf8Json=(value:unknown,filename:string)=>{
+    const json='\uFEFF'+JSON.stringify(value,null,2);
+    downloadBlob(new Blob([new TextEncoder().encode(json)],{type:'application/json;charset=utf-8'}),filename);
+  };
   const persistDraft=async()=>{
     if(!draft||!data)throw new Error('Nenhum rascunho ativo.');
     const saved=await api.saveDraft({...draft,data:syncSummary(data)});
@@ -321,7 +344,7 @@ export default function App(){
   const exportJson=async()=>{
     try{
       const saved=await persistDraft();
-      downloadBlob(new Blob([JSON.stringify(saved,null,2)],{type:'application/json'}),`${saved.name.replace(/[^\w\-]+/g,'_')||saved.id}.json`);
+      downloadUtf8Json(saved,`${saved.name.replace(/[^\w\-]+/g,'_')||saved.id}.json`);
       setError('JSON exportado com o rascunho atual.');
       window.setTimeout(()=>setError(current=>current==='JSON exportado com o rascunho atual.'?'':current),2200);
     }catch(e:any){setError(e.message);}
@@ -331,7 +354,7 @@ export default function App(){
       const saved=await persistDraft();
       const response=await fetch(`/api/drafts/${saved.id}/geojson`);
       if(!response.ok)throw new Error((await response.json().catch(()=>({message:response.statusText}))).message);
-      downloadBlob(await response.blob(),`${saved.name.replace(/[^\w\-]+/g,'_')||saved.id}.geojson`);
+      downloadBlob(new Blob([await response.arrayBuffer()],{type:'application/geo+json;charset=utf-8'}),`${saved.name.replace(/[^\w\-]+/g,'_')||saved.id}.geojson`);
       setError('GeoJSON exportado com o rascunho atual.');
       window.setTimeout(()=>setError(current=>current==='GeoJSON exportado com o rascunho atual.'?'':current),2200);
     }catch(e:any){setError(e.message);}
@@ -340,7 +363,7 @@ export default function App(){
   const importDraft=async(file?:File)=>{
     if(!file)return;
     try{
-      const parsed=JSON.parse(await file.text()) as any;
+      const parsed=JSON.parse((await file.text()).replace(/^\uFEFF/,'')) as any;
       const sourceData=parsed?.data?.units&&parsed?.data?.poles?parsed.data:parsed?.units&&parsed?.poles?parsed:null;
       if(!sourceData)throw new Error('JSON sem poles/units. Exporte pelo botão JSON do Builder.');
       const name=String(file.name.replace(/\.json$/i,'')||'Rascunho importado');

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { calculatePoleMetrics, contiguousWithinRadius, geometryCenter, haversineKm, normalizeMunicipalityCode } from './geo.ts';
+import { calculatePoleMetrics, contiguousWithinRadius, geometryCenter, haversineKm, nearestMunicipalityPlace, normalizeMunicipalityCode, relocatePoleSeat, ufFromMunicipalityCode } from './geo.ts';
 
 describe('geography helpers',()=>{
   it('normalizes IBGE codes',()=>{ assert.equal(normalizeMunicipalityCode('355030'),'3550300'); assert.equal(normalizeMunicipalityCode(3550308),'3550308'); });
@@ -31,5 +31,26 @@ describe('geography helpers',()=>{
     const selected=contiguousWithinRadius(0.05,0.05,50,places);
     assert.equal(selected[0]?.code,'2000001');
     assert.equal(selected.length,2);
+  });
+  it('derives UF from the IBGE municipality prefix',()=>{
+    assert.equal(ufFromMunicipalityCode('3550308'),'SP');
+    assert.equal(ufFromMunicipalityCode('4106902'),'PR');
+  });
+  it('renames a relocated pole to the host municipality',()=>{
+    const pole={id:'p',name:'Campinas',latitude:-22.9,longitude:-47.06,area:'A',municipalityCode:'3509502',municipalityName:'Campinas',uf:'SP',source:'draft' as const};
+    relocatePoleSeat(pole,-46.63,-23.55,{code:'3550308',name:'São Paulo'});
+    assert.equal(pole.name,'São Paulo');
+    assert.equal(pole.municipalityName,'São Paulo');
+    assert.equal(pole.municipalityCode,'3550308');
+    assert.equal(pole.uf,'SP');
+    assert.equal(pole.longitude,-46.63);
+    assert.equal(pole.latitude,-23.55);
+  });
+  it('picks the nearest municipality seat',()=>{
+    const nearest=nearestMunicipalityPlace(-23.55,-46.63,[
+      {code:'3509502',name:'Campinas',latitude:-22.91,longitude:-47.06},
+      {code:'3550308',name:'São Paulo',latitude:-23.55,longitude:-46.63},
+    ]);
+    assert.equal(nearest?.code,'3550308');
   });
 });

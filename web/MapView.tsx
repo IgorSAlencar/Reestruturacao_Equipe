@@ -49,7 +49,7 @@ type Props={
     longitude:number;
     population:number;
   })=>void;
-  onMovePole:(id:string,lng:number,lat:number)=>void;
+  onMovePole:(id:string,lng:number,lat:number,host?:{code:string;name?:string;uf?:string})=>void;
   onBoxSelect:(ids:string[])=>void;
 };
 
@@ -57,9 +57,6 @@ const codeExpression:any=['to-string',['coalesce',['get','CD_MUN'],['get','id'],
 const districtCodeExpression:any=['to-string',['coalesce',['get','CD_DIST'],'']];
 const distCode=(value:unknown)=>String(value||'').replace(/\D/g,'');
 const STANDARD_STYLE='mapbox://styles/mapbox/standard';
-const WAVE_PERIOD_MS=5200;
-const WAVE_MAX_OFFSET_M=14000;
-const WAVE_FRONTS=2;
 const MARKER_OVERLAP_RADIUS_PX=12;
 
 const emptyPoints=():FeatureCollection=>({type:'FeatureCollection',features:[]});
@@ -93,69 +90,6 @@ const updatePoleSource=(m:MapboxMap,p:Props,moved?:{id:string;longitude:number;l
   (m.getSource('poles') as GeoJSONSource|undefined)?.setData({type:'FeatureCollection',features:poleFeatures(m,p,moved)});
 };
 const munCode=(value:unknown)=>String(value||'').replace(/\D/g,'').padStart(7,'0').slice(-7);
-const metersPerDeg=(lat:number)=>{
-  const cos=Math.cos((lat*Math.PI)/180);
-  return{x:111320*Math.max(0.2,Math.abs(cos)),y:110540};
-};
-const toXY=(lng:number,lat:number,lat0:number):[number,number]=>{
-  const m=metersPerDeg(lat0);
-  return[lng*m.x,lat*m.y];
-};
-const toLngLat=(x:number,y:number,lat0:number):[number,number]=>{
-  const m=metersPerDeg(lat0);
-  return[x/m.x,y/m.y];
-};
-const normalize2=(x:number,y:number):[number,number]=>{
-  const len=Math.hypot(x,y);
-  return len>1e-9?[x/len,y/len]:[0,0];
-};
-/** Empurra o anel para fora por distância fixa em metros (onda partindo do contorno). */
-const offsetRingOutward=(ring:number[][],distanceMeters:number):number[][]=>{
-  if(!ring.length||distanceMeters===0)return ring.map(point=>[point[0],point[1]]);
-  const closed=ring.length>1&&ring[0][0]===ring[ring.length-1][0]&&ring[0][1]===ring[ring.length-1][1];
-  const pts=closed?ring.slice(0,-1):ring.slice();
-  if(pts.length<3)return ring.map(point=>[point[0],point[1]]);
-  const lat0=pts.reduce((sum,point)=>sum+point[1],0)/pts.length;
-  const xy=pts.map(([lng,lat])=>toXY(lng,lat,lat0));
-  let area=0;
-  for(let i=0;i<xy.length;i++){
-    const j=(i+1)%xy.length;
-    area+=xy[i][0]*xy[j][1]-xy[j][0]*xy[i][1];
-  }
-  // GeoJSON exterior = CCW → interior à esquerda → fora = normal à direita (dy,-dx)
-  const outward=area>=0?1:-1;
-  const result:number[][]=[];
-  for(let i=0;i<xy.length;i++){
-    const prev=xy[(i-1+xy.length)%xy.length];
-    const curr=xy[i];
-    const next=xy[(i+1)%xy.length];
-    const [inX,inY]=normalize2(curr[0]-prev[0],curr[1]-prev[1]);
-    const [outX,outY]=normalize2(next[0]-curr[0],next[1]-curr[1]);
-    const n1=normalize2(inY*outward,-inX*outward);
-    const n2=normalize2(outY*outward,-outX*outward);
-    let [nx,ny]=normalize2(n1[0]+n2[0],n1[1]+n2[1]);
-    if(!nx&&!ny){[nx,ny]=n2;}
-    const cos=Math.max(0.25,n1[0]*nx+n1[1]*ny);
-    const miter=Math.min(2.5,1/cos);
-    result.push(toLngLat(curr[0]+nx*distanceMeters*miter,curr[1]+ny*distanceMeters*miter,lat0));
-  }
-  result.push([result[0][0],result[0][1]]);
-  return result;
-};
-const offsetGeometryOutward=(geometry:any,distanceMeters:number):any=>{
-  if(!geometry||distanceMeters<=0)return geometry;
-  if(geometry.type==='Polygon'){
-    // Só o anel externo viaja como onda; buracos ficam de fora
-    return{type:'Polygon',coordinates:[offsetRingOutward(geometry.coordinates[0],distanceMeters)]};
-  }
-  if(geometry.type==='MultiPolygon'){
-    return{
-      type:'MultiPolygon',
-      coordinates:geometry.coordinates.map((polygon:number[][][])=>[offsetRingOutward(polygon[0],distanceMeters)]),
-    };
-  }
-  return geometry;
-};
 const inBrazil=(lng:number,lat:number)=>lng>=-74.5&&lng<=-34&&lat>=-34&&lat<=6;
 const isBrazilLabel=(value:unknown)=>{
   const name=String(value||'').trim().toLowerCase();
@@ -264,9 +198,6 @@ export default function MapView(p:Props){
   const showMeshRef=useRef(false);
   const showDistrictMeshRef=useRef(false);
   const meshByCode=useRef(new Map<string,any>());
-  const waveBases=useRef<any[]>([]);
-  const waveColor=useRef('#39d98a');
-  const pulseFrame=useRef(0);
   const selectedKey=p.waveUnitId||'';
   const poles=useMemo(()=>p.data?.poles||[],[p.data]);
   const colorForMarker=(pole:ScenarioData['poles'][number])=>markerColor(pole,poles);
@@ -276,51 +207,6 @@ export default function MapView(p:Props){
   callbacks.current=p;
   showMeshRef.current=showMesh;
   showDistrictMeshRef.current=showDistrictMesh;
-
-  const stopWave=()=>{
-    if(pulseFrame.current)cancelAnimationFrame(pulseFrame.current);
-    pulseFrame.current=0;
-  };
-  const clearWave=(m:MapboxMap)=>{
-    stopWave();
-    waveBases.current=[];
-    (m.getSource('selection-wave') as GeoJSONSource|undefined)?.setData({type:'FeatureCollection',features:[]});
-  };
-  const paintWave=(m:MapboxMap,now:number)=>{
-    const bases=waveBases.current;
-    const source=m.getSource('selection-wave') as GeoJSONSource|undefined;
-    if(!source)return;
-    if(!bases.length){
-      source.setData({type:'FeatureCollection',features:[]});
-      return;
-    }
-    const color=waveColor.current;
-    const features:any[]=[];
-    for(let front=0;front<WAVE_FRONTS;front++){
-      const phase=((now/WAVE_PERIOD_MS)+front/WAVE_FRONTS)%1;
-      // ease suave: sai do contorno e avança para fora sem “estourar”
-      const eased=phase*phase*(3-2*phase);
-      const distance=eased*WAVE_MAX_OFFSET_M;
-      const opacity=Math.max(0,(1-phase)*0.85);
-      const width=2+(1-phase)*1.6;
-      for(const geometry of bases){
-        features.push({
-          type:'Feature',
-          properties:{opacity,width,color},
-          geometry:offsetGeometryOutward(geometry,distance),
-        });
-      }
-    }
-    source.setData({type:'FeatureCollection',features});
-  };
-  const startWave=(m:MapboxMap)=>{
-    stopWave();
-    const tick=(now:number)=>{
-      paintWave(m,now);
-      pulseFrame.current=requestAnimationFrame(tick);
-    };
-    pulseFrame.current=requestAnimationFrame(tick);
-  };
 
   useEffect(()=>{
     if(!container.current||map.current||!p.token)return;
@@ -334,9 +220,13 @@ export default function MapView(p:Props){
       minZoom:1.8,
       maxBounds:[[-95,-48],[-10,18]],
       attributionControl:false,
+      fadeDuration:80,
     });
     map.current=m;
     m.boxZoom.disable();
+    // Padrão do Mapbox (roda 1/450, trackpad 1/100) exige muitos ticks para acompanhar o zoom.
+    m.scrollZoom.setWheelZoomRate(1/70);
+    m.scrollZoom.setZoomRate(1/45);
     m.addControl(new mapboxgl.NavigationControl({showCompass:false}),'bottom-right');
     const lockMercator=()=>m.setProjection('mercator');
     const isStandardStyle=activeStyle===STANDARD_STYLE;
@@ -348,7 +238,6 @@ export default function MapView(p:Props){
         'municipality-fill','portfolio-fill','portfolio-outline','portfolio-stitch',
         'territory-fill','territory-outline','territory-stitch','municipality-line',
         'district-fill','district-line-halo','district-line',
-        'selection-wave',
         'brazil-outline','state-outline','comparison-movements','current-poles-circle',
         'radius-fill','radius-outline','poles-circle',
         'regionals-circle','regionals-label',
@@ -395,13 +284,6 @@ export default function MapView(p:Props){
         'line-width':['interpolate',['linear'],['zoom'],3,1.4,8,2.2],
         'line-opacity':0,
         'line-dasharray':[2.4,2.2],
-      }});
-      m.addSource('selection-wave',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
-      m.addLayer({id:'selection-wave',type:'line',source:'selection-wave',...(isStandardStyle?{slot:'top' as const}:{}),layout:{'line-join':'round','line-cap':'round'},paint:{
-        'line-color':['coalesce',['get','color'],'#39d98a'],
-        'line-width':['coalesce',['get','width'],2.4],
-        'line-opacity':['coalesce',['get','opacity'],0],
-        'line-blur':1.2,
       }});
       m.addLayer({id:'brazil-outline',type:'line',source:'brazil-mask',...(isStandardStyle?{slot:'top' as const}:{}),filter:['==',['get','kind'],'outline'],paint:{'line-color':'#000000','line-width':['interpolate',['linear'],['zoom'],1.8,.8,7,1.8],'line-opacity':.55}});
       m.addLayer({id:'state-outline',type:'line',source:'brazil-mask',...(isStandardStyle?{slot:'top' as const}:{}),filter:['==',['get','kind'],'states'],paint:{'line-color':'#000000','line-width':['interpolate',['linear'],['zoom'],1.8,.8,7,1.8],'line-opacity':.55}});
@@ -651,7 +533,14 @@ export default function MapView(p:Props){
         dragPole.current=null;
         m.dragPan.enable();
         if(!drag.moved){callbacks.current.onPole(drag.id);return;}
-        if(inBrazil(e.lngLat.lng,e.lngLat.lat))callbacks.current.onMovePole(drag.id,e.lngLat.lng,e.lngLat.lat);
+        if(inBrazil(e.lngLat.lng,e.lngLat.lat)){
+          const layers=['municipality-fill','portfolio-fill','territory-fill'].filter(id=>m.getLayer(id));
+          const feature=layers.length?m.queryRenderedFeatures(e.point,{layers})[0]:undefined;
+          const code=munCode(feature?.properties?.CD_MUN||feature?.properties?.id||feature?.properties?.COD_IBGE);
+          const name=String(feature?.properties?.NM_MUN||feature?.properties?.name||feature?.properties?.description||'').trim();
+          const uf=String(feature?.properties?.UF||feature?.properties?.SIGLA_UF||'').trim();
+          callbacks.current.onMovePole(drag.id,e.lngLat.lng,e.lngLat.lat,code&&code!=='0000000'?{code,name,uf}:undefined);
+        }
         else{
           const pole=dataRef.current?.poles.find(item=>item.id===drag.id);
           if(pole)updatePoleSource(m,callbacks.current);
@@ -673,7 +562,7 @@ export default function MapView(p:Props){
       m.on('mouseup',(e:MapMouseEvent)=>{if(!start)return;const features=m.queryRenderedFeatures([start,e.point],{layers:['territory-fill','portfolio-fill','municipality-fill']});const ids=new Set<string>();features.forEach(f=>{const direct=String(f.properties?._unitId||'');if(direct)ids.add(direct);else{const code=String(f.properties?.id||f.properties?.CD_MUN||'').padStart(7,'0');dataRef.current?.units.filter(u=>u.municipalityCode===code||u.municipalityCode===String(f.properties?.id||f.properties?.CD_MUN||'')).forEach(u=>ids.add(u.id));}});callbacks.current.onBoxSelect([...ids]);box?.remove();box=null;start=null;m.dragPan.enable();});
       setStyleReady(true);
     });
-    return()=>{clearWave(m);setStyleReady(false);meshLoaded.current=false;districtMeshLoaded.current=false;meshByCode.current=new Map();popup.current?.remove();popup.current=null;m.remove();map.current=null;};
+    return()=>{setStyleReady(false);meshLoaded.current=false;districtMeshLoaded.current=false;meshByCode.current=new Map();popup.current?.remove();popup.current=null;m.remove();map.current=null;};
   },[p.token,activeStyle]);
 
   useEffect(()=>{
@@ -1025,38 +914,11 @@ export default function MapView(p:Props){
 
   useEffect(()=>{
     const m=map.current;
-    if(!m||!styleReady||!p.data)return;
+    if(!m||!styleReady||!p.data||p.editable)return;
     const focused=p.waveUnitId?p.data.units.find(unit=>unit.id===p.waveUnitId):undefined;
-    if(!focused){
-      clearWave(m);
-      return;
-    }
-
-    const code=munCode(focused.municipalityCode);
-    const bases:any[]=[];
-    const geometry=code&&code!=='0000000'?meshByCode.current.get(code):undefined;
-    if(geometry)bases.push(geometry);
-    // Fallback: geometria das unidades no GeoJSON de territórios
-    if(!bases.length&&p.data.territories.features.length){
-      const feature=p.data.territories.features.find((item:any)=>{
-        const props=item.properties||{};
-        return String(props.DEMAND_ID||props._unitId||'')===focused.id
-          || munCode(props.CD_MUN||props.id||props.COD_IBGE)===code;
-      });
-      if(feature?.geometry)bases.push(feature.geometry);
-    }
-
-    const pole=p.data.poles.find(item=>item.id===p.selectedPole);
-    waveColor.current=pole?colorForTerritory(pole):'#39d98a';
-    waveBases.current=bases;
-    if(bases.length)startWave(m);
-    else clearWave(m);
-
-    // No Builder, clique na carteira não deve mover o mapa.
-    if(!p.editable){
-      m.easeTo({center:[focused.longitude,focused.latitude],zoom:Math.max(m.getZoom(),8.2),duration:650});
-    }
-  },[selectedKey,p.data,p.selectedPole,p.editable,styleReady,meshEpoch,poles]);
+    if(!focused)return;
+    m.easeTo({center:[focused.longitude,focused.latitude],zoom:Math.max(m.getZoom(),8.2),duration:650});
+  },[selectedKey,p.data,p.editable,styleReady]);
 
   useEffect(()=>{
     const m=map.current;
