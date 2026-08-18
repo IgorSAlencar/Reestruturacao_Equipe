@@ -115,6 +115,60 @@ Se der erro:
 
 O script só analisa; ele não altera o rascunho nem o mapa.
 
+## Readequação automática de cenários
+
+O script `Readequar_Cenario.py` recebe um JSON exportado pelo modelo ou pelo
+Builder e redistribui polos e carteiras conforme metas regionais definidas em
+outro JSON. Ele não possui quantidades ou nomes de região embutidos no código.
+
+Exemplo de configuração (todas as áreas e UFs do cenário precisam aparecer
+exatamente uma vez, e a soma de `targetPoles` deve ser igual ao total nacional):
+
+```json
+{
+  "regions": [
+    {
+      "name": "REGIAO A",
+      "areas": ["GERENCIA DE AREA A"],
+      "ufs": ["AA", "AB"],
+      "targetPoles": 20
+    },
+    {
+      "name": "REGIAO B",
+      "areas": ["GERENCIA DE AREA B"],
+      "ufs": ["BA", "BB"],
+      "targetPoles": 18
+    }
+  ],
+  "balanceTolerancePct": 20,
+  "maxP90IncreasePct": 10,
+  "maxAssignmentPasses": 10,
+  "seed": 20260813
+}
+```
+
+Execução:
+
+```powershell
+python Readequar_Cenario.py --input caminho\cenario.json --config caminho\metas.json --output-dir .\resultados_readequacao
+```
+
+A pasta de saída recebe os cenários `conservador`, `equilibrado` e
+`geografico`, um Excel comparativo e um manifesto da execução. A população é
+a medida de carga: cada município fica em um único polo e só pode ser dividido
+quando o JSON contiver distritos explícitos. Municípios repetidos são
+consolidados usando a maior população e a soma das lojas.
+
+As metas regionais e a vinculação UF/região são obrigatórias. Cruzamentos de
+UF dentro da mesma região recebem penalidade, enquanto cruzamentos de região
+são proibidos. A faixa populacional de 80%–120% e o limite de piora de 10% no
+P90 ponderado são preferências auditadas: quando não forem viáveis, o cenário
+ainda é salvo com status `COM_RESSALVAS` e os motivos aparecem no Excel e no
+próprio JSON.
+
+O readequador usa somente coordenadas e não possui malha de vizinhança. Assim,
+ele otimiza proximidade geográfica, mas não certifica contiguidade territorial.
+
 ## Camadas do mapa
 
 O mapa usa projeção Mercator. Cada `DESC_GERENCIA_AREA` recebe uma cor própria;
