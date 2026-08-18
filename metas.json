@@ -1,0 +1,44 @@
+{
+  "regions": [
+    {
+      "name": "SUL",
+      "areas": ["GERENCIA DE AREA 01"],
+      "ufs": ["PR", "SC", "RS"],
+      "targetPoles": 24
+    },
+    {
+      "name": "SUDESTE",
+      "areas": ["GERENCIA DE AREA 02"],
+      "ufs": ["MG", "ES", "RJ"],
+      "targetPoles": 24
+    },
+    {
+      "name": "SAO PAULO",
+      "areas": ["GERENCIA DE AREA 03"],
+      "ufs": ["SP"],
+      "targetPoles": 24
+    },
+    {
+      "name": "CENTRO OESTE/NORTE",
+      "areas": ["GERENCIA DE AREA 04"],
+      "ufs": ["AC", "AP", "AM", "DF", "GO", "MS", "MT", "PA", "RO", "RR", "TO"],
+      "targetPoles": 20
+    },
+    {
+      "name": "NORDESTE 2",
+      "areas": ["GERENCIA DE AREA 05"],
+      "ufs": ["AL", "BA", "SE"],
+      "targetPoles": 24
+    },
+    {
+      "name": "NORDESTE 1",
+      "areas": ["GERENCIA DE AREA 06"],
+      "ufs": ["CE", "MA", "PB", "PE", "PI", "RN"],
+      "targetPoles": 16
+    }
+  ],
+  "balanceTolerancePct": 20,
+  "maxP90IncreasePct": 10,
+  "maxAssignmentPasses": 10,
+  "seed": 20260813
+}
