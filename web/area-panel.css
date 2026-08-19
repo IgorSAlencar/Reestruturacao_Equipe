@@ -64,7 +64,7 @@
 .area-panel-detail-metrics>div{padding:10px 12px;border:1px solid #24384f;border-radius:12px;background:#101e30}
 .area-panel-detail-metrics small{display:block;color:#7f93ad;font-size:10px;text-transform:uppercase}
 .area-panel-detail-metrics b{display:block;margin-top:4px;font-size:18px;font-variant-numeric:tabular-nums}
-.area-panel-detail-bands{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;padding:0 20px 8px}
+.area-panel-detail-bands{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;padding:0 20px 8px}
 .area-panel-band-stat{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid #24384f;border-radius:12px;background:#101e30}
 .area-panel-band-stat small{color:#9eb3cc;font-size:10px;line-height:1.3}
 .area-panel-toolbar-detail{grid-template-columns:1fr auto;align-items:center;padding-top:4px}
