@@ -24,9 +24,8 @@ const unit = (partial: Partial<TerritoryUnit> & Pick<TerritoryUnit, 'id' | 'type
 test('conta unidades nas faixas do mapa de calor', () => {
   const bands = countUnitsByPopulationBand([10_000, 10_001, 50_000, 50_001, 100_000, 500_001, 1_000_001]);
   assert.deepEqual(bands.map(band => ({ label: band.label, count: band.count })), [
-    { label: 'Até 10 mil', count: 1 },
-    { label: '10 a 50 mil', count: 2 },
-    { label: '50 a 100 mil', count: 2 },
+    { label: 'Até 30 mil', count: 2 },
+    { label: '30 a 100 mil', count: 3 },
     { label: '100 a 500 mil', count: 0 },
     { label: '500 mil a 1 milhão', count: 1 },
     { label: 'Acima de 1 milhão', count: 1 },
@@ -35,7 +34,7 @@ test('conta unidades nas faixas do mapa de calor', () => {
 });
 
 test('escolhe tinta contrastante nas faixas claras e escuras', () => {
-  assert.equal(populationBandInk('#fff7ec'), '#1a1208');
+  assert.equal(populationBandInk('#fee8c8'), '#1a1208');
   assert.equal(populationBandInk('#b30000'), '#fff8f0');
 });
 
@@ -58,7 +57,7 @@ test('deduplica município e mantém distrito na linha do polo', () => {
   assert.equal(rows[0].districts, 1);
   assert.equal(rows[0].stores, 6);
   assert.equal(rows[0].bandCounts[0], 1);
-  assert.equal(rows[0].bandCounts[2], 1);
+  assert.equal(rows[0].bandCounts[1], 1);
 });
 
 test('filtra e ordena polos por gerência e unidades', () => {
@@ -87,11 +86,11 @@ test('detalha município e distrito com faixa do heatmap', () => {
     unit({ id: 'DIST-1', type: 'DISTRITO', municipalityCode: '3550308', districtCode: '355030805', municipalityName: 'São Paulo', poleId: 'p1', population: 1_200_000, latitude: -23.6, longitude: -46.7 }),
   ], { '3550308': 11_000_000 });
   assert.equal(details[0].population, 11_000_000);
-  assert.equal(details[0].bandIndex, 5);
+  assert.equal(details[0].bandIndex, 4);
   const district = details.find(row => row.type === 'DISTRITO');
   assert.equal(district?.name, 'Distrito 355030805');
   assert.equal(district?.parentMunicipality, 'São Paulo');
-  assert.equal(district?.bandIndex, 5);
+  assert.equal(district?.bandIndex, 4);
 });
 
 test('resume totais visíveis e monta abas da planilha', () => {
@@ -107,7 +106,7 @@ test('resume totais visíveis e monta abas da planilha', () => {
   ]));
   assert.equal(sheets[0].name, 'Polos');
   assert.equal(sheets[1].name, 'Unidades');
-  assert.ok(sheets[0].headers.includes('Até 10 mil'));
+  assert.ok(sheets[0].headers.includes('Até 30 mil'));
   assert.equal(sheets[0].rows[0][0], 'A');
   assert.equal(sheets[1].rows[0][3], 'Porto Alegre');
 });
