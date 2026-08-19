@@ -6,6 +6,7 @@ import { api, type ExcludedMunicipalitiesResponse, type PopulationResponse, type
 import MapView from './MapView';
 import MunicipalitySizeBreakdown from './MunicipalitySizeBreakdown';
 import PoleAreaTransfer from './PoleAreaTransfer';
+import AreaManagementPanel from './AreaManagementPanel';
 import { areaColor, territoryColor } from '../shared/mapColors';
 import { compareAreaCounts, countPolesByArea, matchPoleMovements, resolveAreaName } from '../shared/scenarioComparison';
 
@@ -18,7 +19,7 @@ export default function App(){
   const importInput=useRef<HTMLInputElement>(null);
   const [config,setConfig]=useState({mapboxToken:'',mapboxStyle:'mapbox://styles/mapbox/dark-v11'}),[scenarios,setScenarios]=useState<ScenarioSummary[]>([]),[draftRefs,setDraftRefs]=useState<any[]>([]);
   const [active,setActive]=useState(''),[data,setData]=useState<ScenarioData|null>(null),[currentData,setCurrentData]=useState<ScenarioData|null>(null),[draft,setDraft]=useState<DraftData|null>(null),[selectedPole,setSelectedPole]=useState<string|null>(null),[selectedUnits,setSelectedUnits]=useState(new Set<string>()),[waveUnitId,setWaveUnitId]=useState<string|null>(null),[radiusKm,setRadiusKm]=useState(0),[selectedArea,setSelectedArea]=useState<string|null>(null),[showAll,setShowAll]=useState(false),[showPoles,setShowPoles]=useState(true),[showCurrentPoles,setShowCurrentPoles]=useState(false),[showMovementLines,setShowMovementLines]=useState(true),[showPopulation,setShowPopulation]=useState(false),[population,setPopulation]=useState<PopulationResponse|null>(null),[showRegionals,setShowRegionals]=useState(false),[regionals,setRegionals]=useState<RegionalOfficesResponse|null>(null),[showExcluded,setShowExcluded]=useState(false),[excludedMunicipalities,setExcludedMunicipalities]=useState<ExcludedMunicipalitiesResponse|null>(null),[loading,setLoading]=useState(true),[error,setError]=useState('');
-  const [past,setPast]=useState<Snapshot[]>([]),[future,setFuture]=useState<Snapshot[]>([]),[filter,setFilter]=useState(''),[portfolioQuery,setPortfolioQuery]=useState(''),[showMunicipalitySizes,setShowMunicipalitySizes]=useState(false);
+  const [past,setPast]=useState<Snapshot[]>([]),[future,setFuture]=useState<Snapshot[]>([]),[filter,setFilter]=useState(''),[portfolioQuery,setPortfolioQuery]=useState(''),[showMunicipalitySizes,setShowMunicipalitySizes]=useState(false),[showAreaPanel,setShowAreaPanel]=useState(false);
   const [munCenters,setMunCenters]=useState<MunicipalityPlace[]>([]);
   const refreshLists=async()=>{const [s,d]=await Promise.all([api.scenarios(),api.drafts()]);setScenarios(s);setDraftRefs(d);setActive(current=>current||s[0]?.id||d[0]?.id||'');};
   useEffect(()=>{Promise.all([api.config(),refreshLists()]).then(([c])=>setConfig(c as any)).catch(e=>setError(e.message));},[]);
@@ -45,6 +46,12 @@ export default function App(){
   const selected=data?.poles.find(p=>p.id===selectedPole)||null;
   const metrics=selected&&data?calculatePoleMetrics(selected,data.units):null;
   useEffect(()=>{setShowMunicipalitySizes(false);},[selectedPole]);
+  useEffect(()=>{
+    if(!showAreaPanel||population)return;
+    let cancelled=false;
+    api.population().then(res=>{if(!cancelled)setPopulation(res);}).catch(()=>{});
+    return()=>{cancelled=true;};
+  },[showAreaPanel,population]);
   const portfolio=useMemo(()=>{
     if(!selected||!data)return [];
     return uniqueUnitsByMunicipality(
@@ -443,6 +450,9 @@ export default function App(){
           <IconBtn className={showAll?'primary':''} pressed={showAll} label={showAll?'Ocultar carteiras':'Mostrar todas as áreas'} onClick={()=>setShowAll(x=>!x)}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
           </IconBtn>
+          <IconBtn className={showAreaPanel?'area-panel-active':''} pressed={showAreaPanel} disabled={!data} label="Painel da gerência de área" onClick={()=>setShowAreaPanel(open=>!open)}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z" fill="none" stroke="currentColor" strokeWidth="1.8"/><path d="M4 10h16M4 15h16M10 5v14" fill="none" stroke="currentColor" strokeWidth="1.8"/></svg>
+          </IconBtn>
         </div>
         <button onClick={refreshCurrent}>Atualizar lojas</button>
         <button onClick={()=>importInput.current?.click()}>Importar</button>
@@ -514,6 +524,7 @@ export default function App(){
         </button>)}</div>
       </>}</aside>}
     </section>
+    {showAreaPanel&&data&&<AreaManagementPanel key={active} data={data} ibgePopulation={population?.values||{}} selectedArea={selectedArea} scenarioName={`${data.summary.kind==='current'?'Atual':data.summary.kind==='draft'?'Builder':data.summary.kind.toUpperCase()} · ${data.summary.name}`} onClose={()=>setShowAreaPanel(false)} onViewOnMap={id=>{setShowAreaPanel(false);setSelectedPole(id);clearSelection();setRadiusKm(0);setPortfolioQuery('');}}/>}
   </main>;
 }
 function Metric({label,value,hint,active,onClick}:{label:string;value:string;hint?:string;active?:boolean;onClick?:()=>void}){
