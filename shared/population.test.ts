@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { populationBandIndex, populationColor, POPULATION_BANDS, countMunicipalitiesBySize, countUnitsByPopulationBand } from './population.ts';
+import { populationBandIndex, populationColor, POPULATION_BANDS, MUNICIPALITY_SIZE_BANDS, countMunicipalitiesBySize, countUnitsByPopulationBand } from './population.ts';
 
 test('classifica os limites da população municipal',()=>{
-  assert.equal(populationBandIndex(10_000),0);
-  assert.equal(populationBandIndex(10_001),1);
-  assert.equal(populationBandIndex(50_000),1);
-  assert.equal(populationBandIndex(1_000_001),5);
-  assert.equal(populationColor(100_000),POPULATION_BANDS[2].color);
+  assert.equal(populationBandIndex(30_000),0);
+  assert.equal(populationBandIndex(30_001),1);
+  assert.equal(populationBandIndex(100_000),1);
+  assert.equal(populationBandIndex(1_000_001),4);
+  assert.equal(populationColor(100_000),POPULATION_BANDS[1].color);
+  assert.equal(MUNICIPALITY_SIZE_BANDS,POPULATION_BANDS);
 });
 
 test('conta unidades nas faixas do mapa de calor nos limites',()=>{
-  const bands=countUnitsByPopulationBand([0,10_000,10_001,50_000]);
+  const bands=countUnitsByPopulationBand([0,30_000,30_001,100_000]);
   assert.equal(bands[0].count,2);
   assert.equal(bands[1].count,2);
 });
