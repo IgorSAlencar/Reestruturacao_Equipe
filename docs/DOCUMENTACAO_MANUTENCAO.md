@@ -31,6 +31,7 @@ Stack: React + Mapbox GL (frontend), Express + `mssql` + SQLite (API), GeoJSON l
 | `.territorios-data/` | Cache local (Atual, população, regionais, centros, SQLite) |
 | `saida_greenfield_v3/`, `saida_greenfield_v4/`, `saida_greenfield_v5/` | Pastas de cenários descobertas automaticamente |
 | `scripts/` | Geradores de máscara e malha distrital |
+| `docs/` | Guias técnicos (manutenção, cenários, GreenField V5) |
 
 Fluxo resumido:
 

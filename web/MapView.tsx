@@ -30,6 +30,7 @@ type Props={
   editable:boolean;
   radiusKm:number;
   onPole:(id:string)=>void;
+  onClearPole:()=>void;
   onUnit:(id:string,additive:boolean)=>void;
   onStageMeshMunicipality:(payload:{
     unitId?:string;
@@ -57,7 +58,7 @@ const codeExpression:any=['to-string',['coalesce',['get','CD_MUN'],['get','id'],
 const districtCodeExpression:any=['to-string',['coalesce',['get','CD_DIST'],'']];
 const distCode=(value:unknown)=>String(value||'').replace(/\D/g,'');
 const STANDARD_STYLE='mapbox://styles/mapbox/standard';
-const MARKER_OVERLAP_RADIUS_PX=12;
+const MARKER_OVERLAP_RADIUS_PX=15;
 
 const emptyPoints=():FeatureCollection=>({type:'FeatureCollection',features:[]});
 const poleFeatures=(m:MapboxMap,p:Props,moved?:{id:string;longitude:number;latitude:number})=>{
@@ -223,6 +224,8 @@ export default function MapView(p:Props){
       fadeDuration:80,
     });
     map.current=m;
+    const resizeObserver=new ResizeObserver(()=>m.resize());
+    resizeObserver.observe(container.current);
     m.boxZoom.disable();
     // Padrão do Mapbox (roda 1/450, trackpad 1/100) exige muitos ticks para acompanhar o zoom.
     m.scrollZoom.setWheelZoomRate(1/70);
@@ -325,7 +328,7 @@ export default function MapView(p:Props){
       }});
       m.addSource('current-poles',{type:'geojson',data:emptyPoints()});
       m.addLayer({id:'current-poles-circle',type:'circle',source:'current-poles',...(isStandardStyle?{slot:'top' as const}:{}),paint:{
-        'circle-radius':9,
+        'circle-radius':11,
         'circle-color':['get','color'],
         'circle-stroke-width':1.5,
         'circle-stroke-color':'#ffffff',
@@ -334,9 +337,9 @@ export default function MapView(p:Props){
       m.addSource('poles',{type:'geojson',data:emptyPoints()});
       m.addLayer({id:'poles-circle',type:'circle',source:'poles',...(isStandardStyle?{slot:'top' as const}:{}),paint:{
         'circle-radius':['case',
-          ['==',['get','overlapsRegional'],1],['case',['==',['get','active'],1],16,14],
-          ['==',['get','active'],1],9,
-          7,
+          ['==',['get','overlapsRegional'],1],['case',['==',['get','active'],1],18,16],
+          ['==',['get','active'],1],11,
+          9,
         ],
         'circle-color':['get','color'],
         'circle-stroke-width':['case',['==',['get','active'],1],3,2],
@@ -356,14 +359,14 @@ export default function MapView(p:Props){
       }});
       m.addSource('regionals',{type:'geojson',data:emptyPoints()});
       m.addLayer({id:'regionals-circle',type:'circle',source:'regionals',...(isStandardStyle?{slot:'top' as const}:{}),paint:{
-        'circle-radius':9,
+        'circle-radius':11,
         'circle-color':'#0d3b66',
         'circle-stroke-width':2,
         'circle-stroke-color':'#ffffff',
       }});
       m.addLayer({id:'regionals-label',type:'symbol',source:'regionals',...(isStandardStyle?{slot:'top' as const}:{}),layout:{
         'text-field':'GR',
-        'text-size':8,
+        'text-size':9,
         'text-font':['Open Sans Bold','Arial Unicode MS Bold'],
         'text-allow-overlap':true,
         'text-ignore-placement':true,
@@ -475,7 +478,13 @@ export default function MapView(p:Props){
       m.on('click',(e:MapMouseEvent)=>{
         if(e.originalEvent.shiftKey)return;
         if(m.queryRenderedFeatures(e.point,{layers:['poles-circle','current-poles-circle','regionals-circle']}).length)return;
-        tryShowDistrict(e.point,e.lngLat,e.originalEvent);
+        if(tryShowDistrict(e.point,e.lngLat,e.originalEvent))return;
+        const outsideBrazil=m.getLayer('world-mask')
+          ?m.queryRenderedFeatures(e.point,{layers:['world-mask']}).length>0
+          :!pointInBrazil(e.lngLat.lng,e.lngLat.lat);
+        if(!outsideBrazil||!callbacks.current.selectedPole)return;
+        popup.current?.remove();
+        callbacks.current.onClearPole();
       });
       m.on('click','territory-fill',showMunicipality);
       m.on('click','portfolio-fill',showMunicipality);
@@ -562,7 +571,7 @@ export default function MapView(p:Props){
       m.on('mouseup',(e:MapMouseEvent)=>{if(!start)return;const features=m.queryRenderedFeatures([start,e.point],{layers:['territory-fill','portfolio-fill','municipality-fill']});const ids=new Set<string>();features.forEach(f=>{const direct=String(f.properties?._unitId||'');if(direct)ids.add(direct);else{const code=String(f.properties?.id||f.properties?.CD_MUN||'').padStart(7,'0');dataRef.current?.units.filter(u=>u.municipalityCode===code||u.municipalityCode===String(f.properties?.id||f.properties?.CD_MUN||'')).forEach(u=>ids.add(u.id));}});callbacks.current.onBoxSelect([...ids]);box?.remove();box=null;start=null;m.dragPan.enable();});
       setStyleReady(true);
     });
-    return()=>{setStyleReady(false);meshLoaded.current=false;districtMeshLoaded.current=false;meshByCode.current=new Map();popup.current?.remove();popup.current=null;m.remove();map.current=null;};
+    return()=>{resizeObserver.disconnect();setStyleReady(false);meshLoaded.current=false;districtMeshLoaded.current=false;meshByCode.current=new Map();popup.current?.remove();popup.current=null;m.remove();map.current=null;};
   },[p.token,activeStyle]);
 
   useEffect(()=>{

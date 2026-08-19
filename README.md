@@ -25,6 +25,20 @@ Os endereços são controlados por `APP_HOST`, `WEB_PORT`, `API_HOST` e
 
 A API descobre automaticamente cenários completos nas pastas `saida_greenfield_v3`, `saida_greenfield_v4` e `saida_greenfield_v5`. A visão **Atual** é criada pelo botão **Atualizar lojas**, que executa a consulta SQL existente e grava um cache local em `.territorios-data`.
 
+## Documentação
+
+Os guias técnicos ficam em `docs/`:
+
+| Arquivo | Conteúdo |
+|---|---|
+| [docs/DOCUMENTACAO_MANUTENCAO.md](docs/DOCUMENTACAO_MANUTENCAO.md) | Manutenção do site, do mapa e das bases |
+| [docs/COMO_ADICIONAR_CENARIOS.md](docs/COMO_ADICIONAR_CENARIOS.md) | Como incluir cenários V3/V4/V5 no mapa |
+| [docs/GREENFIELD_V5_REGRAS_CONSOLIDADAS.md](docs/GREENFIELD_V5_REGRAS_CONSOLIDADAS.md) | Regras autoritativas da V5 |
+| [docs/ESPECIFICACAO_GREENFIELD_V5.md](docs/ESPECIFICACAO_GREENFIELD_V5.md) | Especificação da V5 |
+| [docs/ALGORITMO_GREENFIELD_V5.md](docs/ALGORITMO_GREENFIELD_V5.md) | Algoritmo da V5 |
+| [docs/ARQUITETURA_GREENFIELD_V5.md](docs/ARQUITETURA_GREENFIELD_V5.md) | Arquitetura da V5 |
+| [docs/MATRIZ_PREMISSAS_GREENFIELD.md](docs/MATRIZ_PREMISSAS_GREENFIELD.md) | Premissas V3/V4 → V5 |
+
 ## GreenField V5
 
 A V5 usa uma heurística populacional contígua e não depende do SCIP. Para preparar
